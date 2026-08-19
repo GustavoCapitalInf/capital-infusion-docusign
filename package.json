@@ -1,0 +1,15 @@
+{
+  "name": "capital-infusion-docusign-webhook",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "DocuSign Connect webhook receiver and completed-document downloader",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
