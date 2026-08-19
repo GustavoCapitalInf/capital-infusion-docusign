@@ -17,10 +17,43 @@ async function readBody(request, limit) {
   return Buffer.concat(chunks);
 }
 
-export function createApp({ config, storage, processor, logger }) {
+export function createApp({ config, storage, processor, auth, logger }) {
   return async function app(request, response) {
     const url = new URL(request.url, 'http://localhost');
     if (request.method === 'GET' && url.pathname === '/health') return json(response, 200, { status: 'ok' });
+    if (request.method === 'GET' && url.pathname === '/api/docusign/test-auth') {
+      try {
+        const result = await auth.testAuthentication();
+        logger.info('DocuSign JWT authentication test succeeded', {
+          accountId: result.accountId,
+          baseUri: result.baseUri,
+        });
+        return json(response, 200, {
+          success: true,
+          authenticated: true,
+          accountId: result.accountId,
+          accountName: result.accountName,
+          baseUri: result.baseUri,
+        });
+      } catch (error) {
+        const safeError = error.code || 'authentication_test_failed';
+        logger.warn('DocuSign JWT authentication test failed', {
+          error: safeError,
+          phase: error.phase,
+          privateKeyLoaded: error.privateKeyLoaded,
+          privateKeyParsed: error.privateKeyParsed,
+        });
+        return json(response, ['configuration', 'private-key'].includes(error.phase) ? 500 : 502, {
+          success: false,
+          authenticated: false,
+          error: safeError,
+          message: error.message,
+          privateKeyLoaded: error.privateKeyLoaded ?? false,
+          privateKeyParsed: error.privateKeyParsed ?? false,
+          userInfoSucceeded: false,
+        });
+      }
+    }
     if (request.method !== 'POST' || url.pathname !== '/api/webhooks/docusign') return json(response, 404, { error: 'Not found' });
 
     try {

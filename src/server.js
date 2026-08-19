@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { loadConfig } from './config.js';
+import { loadConfig, missingApiConfiguration } from './config.js';
 import { createLogger } from './logger.js';
 import { DocusignJwtAuth } from './docusign/auth.js';
 import { DocusignClient } from './docusign/client.js';
@@ -18,6 +18,18 @@ const processor = new CompletedEnvelopeProcessor({
   allowedSenders: config.docusign.allowedSenders,
   logger,
 });
-const server = createServer(createApp({ config, storage, processor, logger }));
+const server = createServer(createApp({ config, storage, processor, auth, logger }));
 
-server.listen(config.port, () => logger.info('Server listening', { port: config.port }));
+const missing = missingApiConfiguration(config.docusign);
+if (config.docusign.requireHmac && !config.docusign.hmacSecret) {
+  missing.push('DOCUSIGN_CONNECT_HMAC_SECRET');
+}
+if (missing.length) {
+  logger.warn('DocuSign processing is not fully configured; health check remains available', {
+    missingEnvironmentVariables: missing,
+  });
+}
+
+server.listen(config.port, '0.0.0.0', () => {
+  logger.info('Server listening', { port: config.port, host: '0.0.0.0' });
+});

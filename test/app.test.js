@@ -11,8 +11,15 @@ function fixture() {
     claim: async (event) => ({ claimed: true, file: '/event.json', event }),
   };
   const processor = { process: async (...args) => calls.push(args) };
+  const auth = {
+    testAuthentication: async () => ({
+      accountId: 'account-1',
+      accountName: 'Capital Infusion',
+      baseUri: 'https://demo.docusign.net',
+    }),
+  };
   const logger = { info() {}, warn() {}, error() {} };
-  return { calls, config, storage, processor, logger };
+  return { calls, config, storage, processor, auth, logger };
 }
 
 async function invoke(dependencies, { body = '', headers = {}, method = 'POST', url = '/api/webhooks/docusign' } = {}) {
@@ -66,4 +73,41 @@ test('accepts unsupported events without processing', async () => {
   });
   assert.equal(response.status, 202);
   assert.equal(dependencies.calls.length, 0);
+});
+
+test('returns only safe account fields from the auth diagnostic', async () => {
+  const dependencies = fixture();
+  const response = await invoke(dependencies, { method: 'GET', url: '/api/docusign/test-auth' });
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body, {
+    success: true,
+    authenticated: true,
+    accountId: 'account-1',
+    accountName: 'Capital Infusion',
+    baseUri: 'https://demo.docusign.net',
+  });
+  assert.equal(JSON.stringify(response.body).includes('token'), false);
+});
+
+test('returns safe structured auth failures', async () => {
+  const dependencies = fixture();
+  dependencies.auth.testAuthentication = async () => {
+    throw Object.assign(new Error('Consent is required'), {
+      code: 'consent_required',
+      phase: 'oauth',
+      privateKeyLoaded: true,
+      privateKeyParsed: true,
+    });
+  };
+  const response = await invoke(dependencies, { method: 'GET', url: '/api/docusign/test-auth' });
+  assert.equal(response.status, 502);
+  assert.deepEqual(response.body, {
+    success: false,
+    authenticated: false,
+    error: 'consent_required',
+    message: 'Consent is required',
+    privateKeyLoaded: true,
+    privateKeyParsed: true,
+    userInfoSucceeded: false,
+  });
 });

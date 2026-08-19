@@ -13,24 +13,28 @@ function positiveInteger(value, fallback, name) {
   return parsed;
 }
 
+function string(value, fallback = '') {
+  return String(value ?? fallback).trim();
+}
+
 export function loadConfig(environment = process.env) {
   return {
     port: positiveInteger(environment.PORT, 3000, 'PORT'),
-    logLevel: environment.LOG_LEVEL || 'info',
+    logLevel: string(environment.LOG_LEVEL, 'info'),
     docusign: {
-      integrationKey: environment.DOCUSIGN_INTEGRATION_KEY || '',
-      userId: environment.DOCUSIGN_USER_ID || '',
-      accountId: environment.DOCUSIGN_ACCOUNT_ID || '',
-      privateKeyPath: environment.DOCUSIGN_PRIVATE_KEY_PATH || '',
-      authServer: environment.DOCUSIGN_AUTH_SERVER || 'account-d.docusign.com',
-      baseUrl: (environment.DOCUSIGN_BASE_URL || 'https://demo.docusign.net').replace(/\/$/, ''),
+      integrationKey: string(environment.DOCUSIGN_INTEGRATION_KEY),
+      userId: string(environment.DOCUSIGN_USER_ID),
+      accountId: string(environment.DOCUSIGN_ACCOUNT_ID),
+      privateKeyPath: string(environment.DOCUSIGN_PRIVATE_KEY_PATH),
+      authServer: string(environment.DOCUSIGN_AUTH_SERVER, 'account-d.docusign.com'),
+      baseUrl: string(environment.DOCUSIGN_BASE_URL, 'https://demo.docusign.net').replace(/\/$/, ''),
       allowedSenders: new Set(
         (environment.DOCUSIGN_ALLOWED_SENDERS || '')
           .split(',')
           .map((email) => email.trim().toLowerCase())
           .filter(Boolean),
       ),
-      hmacSecret: environment.DOCUSIGN_CONNECT_HMAC_SECRET || '',
+      hmacSecret: string(environment.DOCUSIGN_CONNECT_HMAC_SECRET),
       requireHmac: boolean(environment.DOCUSIGN_REQUIRE_HMAC, true),
       storageDir: path.resolve(environment.DOCUSIGN_STORAGE_DIR || './data/docusign'),
       maxWebhookBytes: positiveInteger(
@@ -42,7 +46,7 @@ export function loadConfig(environment = process.env) {
   };
 }
 
-export function assertApiConfiguration(config) {
+export function missingApiConfiguration(config) {
   const required = [
     ['DOCUSIGN_INTEGRATION_KEY', config.integrationKey],
     ['DOCUSIGN_USER_ID', config.userId],
@@ -50,6 +54,29 @@ export function assertApiConfiguration(config) {
     ['DOCUSIGN_PRIVATE_KEY_PATH', config.privateKeyPath],
     ['DOCUSIGN_BASE_URL', config.baseUrl],
   ];
-  const missing = required.filter(([, value]) => !value).map(([name]) => name);
-  if (missing.length) throw new Error(`Missing DocuSign configuration: ${missing.join(', ')}`);
+  return required.filter(([, value]) => !value).map(([name]) => name);
+}
+
+export function missingJwtConfiguration(config) {
+  const required = [
+    ['DOCUSIGN_INTEGRATION_KEY', config.integrationKey],
+    ['DOCUSIGN_USER_ID', config.userId],
+    ['DOCUSIGN_PRIVATE_KEY_PATH', config.privateKeyPath],
+    ['DOCUSIGN_AUTH_SERVER', config.authServer],
+  ];
+  return required.filter(([, value]) => !value).map(([name]) => name);
+}
+
+export function assertJwtConfiguration(config) {
+  const missing = missingJwtConfiguration(config);
+  if (missing.length) {
+    throw new Error(`Missing required environment variable${missing.length === 1 ? '' : 's'}: ${missing.join(', ')}`);
+  }
+}
+
+export function assertApiConfiguration(config) {
+  const missing = missingApiConfiguration(config);
+  if (missing.length) {
+    throw new Error(`Missing required environment variable${missing.length === 1 ? '' : 's'}: ${missing.join(', ')}`);
+  }
 }

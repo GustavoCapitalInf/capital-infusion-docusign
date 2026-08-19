@@ -73,8 +73,78 @@ send and complete a demo envelope, then verify the structured logs and the new
 envelope directory under `data/docusign`. Access tokens, key material, and document
 contents are never logged.
 
+## Render deployment
+
+The existing Render web service is configured with:
+
+```text
+Build Command: npm install
+Start Command: npm start
+Health Check Path: /health
+Health Check URL: https://capital-infusion-docusign.onrender.com/health
+DocuSign Webhook: https://capital-infusion-docusign.onrender.com/api/webhooks/docusign
+```
+
+Add these environment variables in the Render dashboard:
+
+```text
+LOG_LEVEL=info
+DOCUSIGN_INTEGRATION_KEY=<integration-key-guid>
+DOCUSIGN_USER_ID=<api-user-guid>
+DOCUSIGN_ACCOUNT_ID=<account-guid>
+DOCUSIGN_PRIVATE_KEY_PATH=/etc/secrets/docusign-private.key
+DOCUSIGN_AUTH_SERVER=account-d.docusign.com
+DOCUSIGN_BASE_URL=https://demo.docusign.net
+DOCUSIGN_ALLOWED_SENDERS=hr@capital-infusion.com
+DOCUSIGN_CONNECT_HMAC_SECRET=<connect-hmac-secret>
+DOCUSIGN_REQUIRE_HMAC=true
+DOCUSIGN_STORAGE_DIR=./data/docusign
+DOCUSIGN_MAX_WEBHOOK_BYTES=1048576
+```
+
+Do not set `PORT` manually unless the Render service requires an override; Render
+provides it automatically and the server binds it on `0.0.0.0`. Local development
+continues to default to port `3000`.
+
+In the service's **Environment → Secret Files** section, create a secret file named
+`docusign-private.key`. Paste the complete RSA PEM file, including
+its `BEGIN` and `END` lines, as the file contents. Render exposes it at runtime as
+`/etc/secrets/docusign-private.key`, which is the exact value to use for
+`DOCUSIGN_PRIVATE_KEY_PATH`.
+
+### Storage warning
+
+`DOCUSIGN_STORAGE_DIR=./data/docusign` is suitable only for this milestone and local
+testing. Render's filesystem is ephemeral by default, so documents, event records,
+and idempotency state stored there can disappear after a deploy, restart, or free
+service spin-down. This is **not permanent production storage**. A future milestone
+should move documents and idempotency records to durable object/database storage;
+alternatively, a paid Render persistent disk can preserve a configured mount path.
+
+Startup reports only the names of missing DocuSign variables. It does not print
+their values, and `/health` remains available while DocuSign processing is being
+configured.
+
+### Temporary JWT authentication diagnostic
+
+During integration setup, call:
+
+```text
+GET https://capital-infusion-docusign.onrender.com/api/docusign/test-auth
+```
+
+The endpoint checks that the RSA Secret File can be loaded and parsed, exchanges a
+JWT using the `signature impersonation` scopes, calls DocuSign `/oauth/userinfo`, and
+returns only the selected account ID, account name, and API base URI. It never
+returns the private key, JWT assertion, access token, or authorization header.
+
+This endpoint is temporary and should be removed or access-controlled after JWT
+setup has been verified.
+
 Useful DocuSign references:
 
 - [Build a Connect listener](https://developers.docusign.com/platform/webhooks/connect/build-listener/)
 - [JWT Grant authentication](https://developers.docusign.com/platform/auth/jwt/)
 - [eSignature REST API](https://developers.docusign.com/docs/esign-rest-api/)
+- [Render environment variables and secret files](https://render.com/docs/configure-environment-variables)
+- [Render persistent disks](https://render.com/docs/disks)
