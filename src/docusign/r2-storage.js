@@ -3,9 +3,11 @@ import {
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
 } from '@aws-sdk/client-s3';
 import { documentFilename, metadataClassification, safeSegment } from './storage.js';
+import { normalizeEnvelopeMetadata, publicEnvelope, repSummary, upsertEnvelope } from './catalog.js';
 
 const LOCK_MAX_AGE_MS = 15 * 60 * 1000;
 
@@ -68,6 +70,68 @@ export class R2Storage {
   async getJson(key) {
     const response = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }));
     return JSON.parse(await bodyToString(response.Body));
+  }
+
+  async getJsonRecord(key) {
+    try {
+      const response = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }));
+      return { value: JSON.parse(await bodyToString(response.Body)), etag: response.ETag, exists: true };
+    } catch (error) {
+      if (isNotFound(error)) return { value: undefined, etag: undefined, exists: false };
+      throw error;
+    }
+  }
+
+  async updateJsonIndex(key, initialValue, mutate) {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const current = await this.getJsonRecord(key);
+      const next = mutate(current.value || structuredClone(initialValue));
+      try {
+        await this.put(key, `${JSON.stringify(next, null, 2)}\n`, {
+          ContentType: 'application/json',
+          ...(current.exists ? { IfMatch: current.etag } : { IfNoneMatch: '*' }),
+        });
+        return next;
+      } catch (error) {
+        if (!isPreconditionFailed(error)) throw stageError(error, 'index_upload');
+      }
+    }
+    throw storageError('r2_index_conflict', 'Cloudflare R2 index update conflicted repeatedly');
+  }
+
+  repKey(repId) {
+    return `${this.prefix}/reps/${encodeURIComponent(repId)}/index.json`;
+  }
+
+  async indexEnvelope(metadata) {
+    const envelope = publicEnvelope(normalizeEnvelopeMetadata(metadata));
+    const repIndex = await this.updateJsonIndex(
+      this.repKey(envelope.rep.repId),
+      { repId: envelope.rep.repId, repEmail: envelope.rep.email, repName: envelope.rep.name, repType: envelope.rep.type, envelopes: [] },
+      (index) => ({
+        ...index,
+        repId: envelope.rep.repId,
+        repEmail: envelope.rep.type === 'internal' ? envelope.rep.email : undefined,
+        repName: envelope.rep.name,
+        repType: envelope.rep.type,
+        envelopes: upsertEnvelope(index.envelopes || [], envelope),
+      }),
+    );
+    await this.updateJsonIndex(
+      `${this.prefix}/envelopes/index.json`,
+      { envelopes: [] },
+      (index) => ({ envelopes: upsertEnvelope(index.envelopes || [], envelope) }),
+    );
+    const summary = repSummary(envelope.rep, repIndex.envelopes);
+    await this.updateJsonIndex(
+      `${this.prefix}/reps/index.json`,
+      { reps: [] },
+      (index) => ({
+        reps: [...(index.reps || []).filter((rep) => rep.repId !== summary.repId), summary]
+          .sort((a, b) => String(b.latestCompletedAt || '').localeCompare(String(a.latestCompletedAt || ''))),
+      }),
+    );
+    return envelope;
   }
 
   async acquireLock(lock) {
@@ -179,6 +243,8 @@ export class R2Storage {
       status: envelopeMetadata.status,
       senderEmail: envelopeMetadata.senderEmail,
       eventTimestamp: envelopeMetadata.eventTimestamp,
+      completedAt: envelopeMetadata.completedDateTime || envelopeMetadata.eventTimestamp,
+      rep: envelopeMetadata.rep,
       retrievedAt: this.now().toISOString(),
       documents: saved,
     };
@@ -187,7 +253,110 @@ export class R2Storage {
     } catch (error) {
       throw stageError(error, 'metadata_upload');
     }
+    try {
+      await this.indexEnvelope(metadata);
+    } catch (error) {
+      throw stageError(error, 'index_upload');
+    }
     return saved;
+  }
+
+  async rebuildIndexes() {
+    let continuationToken;
+    do {
+      const result = await this.client.send(new ListObjectsV2Command({
+        Bucket: this.bucket,
+        Prefix: `${this.prefix}/envelopes/`,
+        Delimiter: '/',
+        ContinuationToken: continuationToken,
+      }));
+      for (const entry of result.CommonPrefixes || []) {
+        if (!entry.Prefix || entry.Prefix === `${this.prefix}/envelopes/`) continue;
+        try {
+          await this.indexEnvelope(await this.getJson(`${entry.Prefix}metadata.json`));
+        } catch (error) {
+          if (!isNotFound(error) && !(error instanceof SyntaxError) && !String(error.message).includes('Corrupted envelope metadata')) throw error;
+        }
+      }
+      continuationToken = result.IsTruncated ? result.NextContinuationToken : undefined;
+    } while (continuationToken);
+    await this.updateJsonIndex(
+      `${this.prefix}/envelopes/index.json`,
+      { envelopes: [] },
+      (index) => ({ envelopes: index.envelopes || [] }),
+    );
+    await this.updateJsonIndex(
+      `${this.prefix}/reps/index.json`,
+      { reps: [] },
+      (index) => ({ reps: index.reps || [] }),
+    );
+  }
+
+  async ensureIndexes() {
+    const global = await this.getJsonRecord(`${this.prefix}/envelopes/index.json`);
+    if (global.exists) return;
+    if (!this.rebuildPromise) this.rebuildPromise = this.rebuildIndexes().finally(() => { this.rebuildPromise = undefined; });
+    await this.rebuildPromise;
+  }
+
+  async listReps() {
+    await this.ensureIndexes();
+    const record = await this.getJsonRecord(`${this.prefix}/reps/index.json`);
+    return record.value?.reps || [];
+  }
+
+  async listRepEnvelopes(repId) {
+    await this.ensureIndexes();
+    const record = await this.getJsonRecord(this.repKey(repId));
+    if (!record.exists) return undefined;
+    return {
+      rep: {
+        repId: record.value.repId,
+        type: record.value.repType,
+        email: record.value.repEmail,
+        name: record.value.repName,
+      },
+      envelopes: record.value.envelopes || [],
+    };
+  }
+
+  async listEnvelopes() {
+    await this.ensureIndexes();
+    const record = await this.getJsonRecord(`${this.prefix}/envelopes/index.json`);
+    return record.value?.envelopes || [];
+  }
+
+  async getEnvelopeRecord(envelopeId) {
+    const key = `${this.prefix}/envelopes/${safeSegment(envelopeId, 'envelope')}/metadata.json`;
+    try {
+      return normalizeEnvelopeMetadata(await this.getJson(key));
+    } catch (error) {
+      if (isNotFound(error)) return undefined;
+      if (error instanceof SyntaxError) throw new Error('Corrupted envelope metadata');
+      throw error;
+    }
+  }
+
+  async getEnvelope(envelopeId) {
+    const envelope = await this.getEnvelopeRecord(envelopeId);
+    return envelope ? publicEnvelope(envelope) : undefined;
+  }
+
+  async getDocument(envelopeId, documentId) {
+    const envelope = await this.getEnvelopeRecord(envelopeId);
+    if (!envelope) return undefined;
+    const document = envelope.documents.find((item) => item.documentId === documentId);
+    if (!document?.objectKey) return undefined;
+    const response = await this.client.send(new GetObjectCommand({
+      Bucket: this.bucket,
+      Key: document.objectKey,
+    }));
+    return {
+      document,
+      body: response.Body,
+      contentLength: response.ContentLength || document.bytes,
+      contentType: response.ContentType || 'application/pdf',
+    };
   }
 
   async testConnectivity() {

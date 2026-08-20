@@ -16,6 +16,7 @@ const processor = new CompletedEnvelopeProcessor({
   client,
   storage,
   allowedSenders: config.docusign.allowedSenders,
+  repEmailDomain: config.docusign.repEmailDomain,
   logger,
 });
 const server = createServer(createApp({ config, storage, processor, auth, logger }));

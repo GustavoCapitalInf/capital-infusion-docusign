@@ -42,6 +42,9 @@ export function loadConfig(environment = process.env) {
         1024 * 1024,
         'DOCUSIGN_MAX_WEBHOOK_BYTES',
       ),
+      repEmailDomain: string(environment.DOCUSIGN_REP_EMAIL_DOMAIN, 'capital-infusion.com')
+        .toLowerCase()
+        .replace(/^@/, ''),
     },
     r2: {
       accountId: string(environment.R2_ACCOUNT_ID),

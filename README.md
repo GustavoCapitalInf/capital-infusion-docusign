@@ -100,6 +100,7 @@ DOCUSIGN_CONNECT_HMAC_SECRET=<connect-hmac-secret>
 DOCUSIGN_REQUIRE_HMAC=true
 DOCUSIGN_STORAGE_DIR=./data/docusign
 DOCUSIGN_MAX_WEBHOOK_BYTES=1048576
+DOCUSIGN_REP_EMAIL_DOMAIN=capital-infusion.com
 R2_ACCOUNT_ID=<cloudflare-account-id>
 R2_ENDPOINT=https://<cloudflare-account-id>.r2.cloudflarestorage.com
 R2_BUCKET_NAME=capital-infusion-docusign
@@ -161,6 +162,56 @@ The check uploads a tiny uniquely named object under `healthchecks/`, verifies i
 with `HEAD`, and deletes it. It returns only booleans, provider, bucket, and a safe
 error code. This temporary endpoint should be removed after production setup has
 been verified.
+
+## Rep-centric document catalog
+
+Completed envelopes are grouped by their authoritative DocuSign sender. Sender
+email is normalized to lowercase and validated against
+`DOCUSIGN_REP_EMAIL_DOMAIN`. DocuSign's sender display name is preferred; otherwise
+the application converts an address such as `john.smith@capital-infusion.com` to
+`John Smith`. External or missing senders are retained in the `unassigned` group
+and are never inferred from recipient details.
+
+R2 keeps the canonical envelope layout unchanged and adds logical JSON indexes:
+
+```text
+docusign/reps/index.json
+docusign/reps/{encodedRepId}/index.json
+docusign/envelopes/index.json
+```
+
+Index updates use ETag conditions and replace entries by envelope ID, so duplicate
+webhooks cannot append duplicate rep-envelope relationships. If indexes do not yet
+exist, the first catalog request backfills them by listing envelope prefixes and
+reading only `metadata.json`—document bodies are not scanned or downloaded.
+
+Catalog APIs:
+
+```text
+GET /api/reps
+GET /api/reps/:repId/envelopes
+GET /api/docusign/envelopes
+GET /api/docusign/envelopes/:envelopeId
+GET /api/docusign/envelopes/:envelopeId/documents/:documentId
+```
+
+The listing APIs support `search` and `sort` query parameters. Document access
+validates the envelope and document IDs against private metadata, then streams the
+object through the backend with private/no-store headers. Clients never submit or
+receive an R2 object key, credential, or permanent object URL. Add `?download=true`
+to request a download instead of inline viewing.
+
+The internal interface is available at:
+
+```text
+/documents
+/documents/reps/:repId
+/documents/envelopes/:envelopeId
+```
+
+It uses the catalog APIs for rep search, rep/envelope sorting, detail views, and
+private PDF viewing/downloading. A normal refresh reflects indexes updated by the
+latest completed-envelope webhook.
 
 Startup reports only the names of missing DocuSign variables. It does not print
 their values, and `/health` remains available while DocuSign processing is being

@@ -1,14 +1,23 @@
 import { classifyDocument } from './storage.js';
+import { resolveRepFromSender } from './rep.js';
 
 function senderEmail(envelope) {
   return envelope?.sender?.email || envelope?.sender?.emailAddress || envelope?.senderEmail;
 }
 
+function envelopeSender(envelope, webhookEmail) {
+  return {
+    email: senderEmail(envelope) || webhookEmail,
+    name: envelope?.sender?.userName || envelope?.sender?.name || envelope?.senderName,
+  };
+}
+
 export class CompletedEnvelopeProcessor {
-  constructor({ client, storage, allowedSenders, logger }) {
+  constructor({ client, storage, allowedSenders, repEmailDomain, logger }) {
     this.client = client;
     this.storage = storage;
     this.allowedSenders = allowedSenders;
+    this.repEmailDomain = repEmailDomain;
     this.logger = logger;
   }
 
@@ -16,15 +25,15 @@ export class CompletedEnvelopeProcessor {
     const eventFile = claim.file;
     try {
       const envelope = await this.client.getEnvelope(event.envelopeId);
-      const sender = (senderEmail(envelope) || event.senderEmail || '').toLowerCase();
+      const senderDetails = envelopeSender(envelope, event.senderEmail);
+      const sender = (senderDetails.email || '').toLowerCase();
+      const rep = resolveRepFromSender(senderDetails, this.repEmailDomain);
       if (this.allowedSenders.size && !this.allowedSenders.has(sender)) {
-        await this.storage.updateEvent(eventFile, {
-          status: 'ignored',
-          processedAt: new Date().toISOString(),
-          reason: sender ? 'sender-not-allowed' : 'sender-unavailable',
+        this.logger.warn('DocuSign sender is outside the configured sender allowlist; storing as rep-resolved envelope', {
+          envelopeId: event.envelopeId,
+          senderEmail: sender || undefined,
+          repType: rep.type,
         });
-        this.logger.info('DocuSign envelope ignored by sender filter', { envelopeId: event.envelopeId, senderEmail: sender || undefined });
-        return;
       }
 
       const listed = await this.client.listDocuments(event.envelopeId);
@@ -50,6 +59,7 @@ export class CompletedEnvelopeProcessor {
         senderEmail: sender || undefined,
         completedDateTime: envelope.completedDateTime,
         eventTimestamp: event.timestamp,
+        rep,
       });
       await this.storage.updateEvent(eventFile, {
         status: 'processed',

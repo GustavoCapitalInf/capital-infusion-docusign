@@ -4,11 +4,94 @@ import {
   isCompletedEnvelope,
   verifyConnectHmac,
 } from './docusign/webhook.js';
+import { documentsPage } from './documents-ui.js';
 
 function json(response, status, body) {
   const contents = JSON.stringify(body);
   response.writeHead(status, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(contents) });
   response.end(contents);
+}
+
+function html(response, contents) {
+  response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-length': Buffer.byteLength(contents) });
+  response.end(contents);
+}
+
+function safeDecode(value) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function validRepId(value, domain) {
+  const escapedDomain = String(domain || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return value === 'unassigned' || new RegExp(`^[^\\s/@]+@${escapedDomain}$`, 'i').test(value || '');
+}
+
+function validEnvelopeId(value) {
+  return /^[a-zA-Z0-9-]{1,100}$/.test(value || '');
+}
+
+function validDocumentId(value) {
+  return /^[a-zA-Z0-9._-]{1,100}$/.test(value || '');
+}
+
+function filterAndSortReps(reps, url) {
+  const search = (url.searchParams.get('search') || '').trim().toLowerCase();
+  const sort = url.searchParams.get('sort') || 'recent';
+  const filtered = search
+    ? reps.filter((rep) => `${rep.name || ''} ${rep.email || ''}`.toLowerCase().includes(search))
+    : [...reps];
+  return filtered.sort((a, b) => {
+    if (sort === 'name') return String(a.name || '').localeCompare(String(b.name || ''));
+    if (sort === 'count') return b.completedEnvelopeCount - a.completedEnvelopeCount;
+    return String(b.latestCompletedAt || '').localeCompare(String(a.latestCompletedAt || ''));
+  });
+}
+
+function filterAndSortEnvelopes(envelopes, url) {
+  const search = (url.searchParams.get('search') || '').trim().toLowerCase();
+  const sort = url.searchParams.get('sort') || 'newest';
+  const filtered = search
+    ? envelopes.filter((envelope) => `${envelope.primaryDocumentName || ''} ${envelope.envelopeId} ${envelope.completedAt || ''}`
+      .toLowerCase().includes(search))
+    : [...envelopes];
+  return filtered.sort((a, b) => {
+    if (sort === 'oldest') return String(a.completedAt || '').localeCompare(String(b.completedAt || ''));
+    if (sort === 'name') return String(a.primaryDocumentName || '').localeCompare(String(b.primaryDocumentName || ''));
+    return String(b.completedAt || '').localeCompare(String(a.completedAt || ''));
+  });
+}
+
+async function streamDocument(response, result, download) {
+  const filename = String(result.document.name || 'document.pdf').replace(/["\r\n]/g, '_');
+  response.writeHead(200, {
+    'content-type': result.contentType,
+    ...(result.contentLength ? { 'content-length': result.contentLength } : {}),
+    'content-disposition': `${download ? 'attachment' : 'inline'}; filename="${filename}"`,
+    'cache-control': 'private, no-store',
+    'x-content-type-options': 'nosniff',
+  });
+  for await (const chunk of result.body) response.write(chunk);
+  response.end();
+}
+
+async function catalogResponse(response, logger, action) {
+  try {
+    return await action();
+  } catch (error) {
+    logger.error('Document catalog request failed', { error: error.message });
+    if (!response.headersSent) {
+      return json(response, 500, {
+        error: error.message === 'Corrupted envelope metadata'
+          ? 'Corrupted envelope metadata'
+          : 'Document catalog request failed',
+      });
+    }
+    response.destroy(error);
+  }
 }
 
 async function readBody(request, limit) {
@@ -27,6 +110,11 @@ export function createApp({ config, storage, processor, auth, logger }) {
   return async function app(request, response) {
     const url = new URL(request.url, 'http://localhost');
     if (request.method === 'GET' && url.pathname === '/health') return json(response, 200, { status: 'ok' });
+    if (request.method === 'GET' && (
+      url.pathname === '/documents' ||
+      /^\/documents\/reps\/[^/]+$/.test(url.pathname) ||
+      /^\/documents\/envelopes\/[^/]+$/.test(url.pathname)
+    )) return html(response, documentsPage);
     if (request.method === 'GET' && url.pathname === '/api/docusign/test-auth') {
       try {
         const result = await auth.testAuthentication();
@@ -79,6 +167,50 @@ export function createApp({ config, storage, processor, auth, logger }) {
           message: error.message,
         });
       }
+    }
+    if (request.method === 'GET' && url.pathname === '/api/reps') {
+      return catalogResponse(response, logger, async () =>
+        json(response, 200, { reps: filterAndSortReps(await storage.listReps(), url) }));
+    }
+    const repMatch = request.method === 'GET' && url.pathname.match(/^\/api\/reps\/([^/]+)\/envelopes$/);
+    if (repMatch) {
+      const repId = safeDecode(repMatch[1]);
+      if (!validRepId(repId, config.docusign.repEmailDomain)) return json(response, 400, { error: 'Invalid rep ID' });
+      return catalogResponse(response, logger, async () => {
+        const result = await storage.listRepEnvelopes(repId);
+        if (!result) return json(response, 404, { error: 'Rep not found' });
+        return json(response, 200, { rep: result.rep, envelopes: filterAndSortEnvelopes(result.envelopes, url) });
+      });
+    }
+    if (request.method === 'GET' && url.pathname === '/api/docusign/envelopes') {
+      return catalogResponse(response, logger, async () =>
+        json(response, 200, { envelopes: filterAndSortEnvelopes(await storage.listEnvelopes(), url) }));
+    }
+    const documentMatch = request.method === 'GET' && url.pathname.match(
+      /^\/api\/docusign\/envelopes\/([^/]+)\/documents\/([^/]+)$/,
+    );
+    if (documentMatch) {
+      const envelopeId = safeDecode(documentMatch[1]);
+      const documentId = safeDecode(documentMatch[2]);
+      if (!validEnvelopeId(envelopeId) || !validDocumentId(documentId)) {
+        return json(response, 400, { error: 'Invalid envelope or document ID' });
+      }
+      return catalogResponse(response, logger, async () => {
+        const result = await storage.getDocument(envelopeId, documentId);
+        if (!result) return json(response, 404, { error: 'Document not found' });
+        return streamDocument(response, result, url.searchParams.get('download') === 'true');
+      });
+    }
+    const envelopeMatch = request.method === 'GET' && url.pathname.match(/^\/api\/docusign\/envelopes\/([^/]+)$/);
+    if (envelopeMatch) {
+      const envelopeId = safeDecode(envelopeMatch[1]);
+      if (!validEnvelopeId(envelopeId)) return json(response, 400, { error: 'Invalid envelope ID' });
+      return catalogResponse(response, logger, async () => {
+        const envelope = await storage.getEnvelope(envelopeId);
+        return envelope
+          ? json(response, 200, envelope)
+          : json(response, 404, { error: 'Envelope not found' });
+      });
     }
     if (request.method !== 'POST' || url.pathname !== '/api/webhooks/docusign') return json(response, 404, { error: 'Not found' });
 

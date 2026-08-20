@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
-import { mkdir, open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { normalizeEnvelopeMetadata, publicEnvelope, repSummary } from './catalog.js';
 
 export function safeSegment(value, fallback = 'document') {
   const normalized = String(value || fallback)
@@ -123,11 +125,99 @@ export class FileStorage {
     await atomicJson(path.join(envelopeDirectory, 'metadata.json'), {
       provider: 'docusign',
       envelopeId,
+      status: envelopeMetadata.status,
+      senderEmail: envelopeMetadata.senderEmail,
+      rep: envelopeMetadata.rep,
+      completedAt: envelopeMetadata.completedDateTime || envelopeMetadata.eventTimestamp,
+      eventTimestamp: envelopeMetadata.eventTimestamp,
       retrievedAt: new Date().toISOString(),
       envelope: envelopeMetadata,
       documents: saved,
     });
     return saved;
+  }
+
+  async getEnvelopeRecord(envelopeId) {
+    const file = path.join(this.root, 'envelopes', safeSegment(envelopeId, 'envelope'), 'metadata.json');
+    try {
+      return normalizeEnvelopeMetadata(JSON.parse(await readFile(file, 'utf8')));
+    } catch (error) {
+      if (error.code === 'ENOENT') return undefined;
+      if (error instanceof SyntaxError) throw new Error('Corrupted envelope metadata');
+      throw error;
+    }
+  }
+
+  async getEnvelope(envelopeId) {
+    const envelope = await this.getEnvelopeRecord(envelopeId);
+    return envelope ? publicEnvelope(envelope) : undefined;
+  }
+
+  async listEnvelopes() {
+    const root = path.join(this.root, 'envelopes');
+    let entries;
+    try {
+      entries = await readdir(root, { withFileTypes: true });
+    } catch (error) {
+      if (error.code === 'ENOENT') return [];
+      throw error;
+    }
+    const envelopes = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      try {
+        const envelope = await this.getEnvelope(entry.name);
+        if (envelope) envelopes.push(envelope);
+      } catch (error) {
+        if (error.message !== 'Corrupted envelope metadata') throw error;
+      }
+    }
+    return envelopes.sort((a, b) => String(b.completedAt || '').localeCompare(String(a.completedAt || '')));
+  }
+
+  async listReps() {
+    const envelopes = await this.listEnvelopes();
+    const grouped = new Map();
+    for (const envelope of envelopes) {
+      const group = grouped.get(envelope.rep.repId) || { rep: envelope.rep, envelopes: [] };
+      group.envelopes.push(envelope);
+      grouped.set(envelope.rep.repId, group);
+    }
+    return [...grouped.values()]
+      .map(({ rep, envelopes: items }) => repSummary(rep, items))
+      .sort((a, b) => String(b.latestCompletedAt || '').localeCompare(String(a.latestCompletedAt || '')));
+  }
+
+  async listRepEnvelopes(repId) {
+    const envelopes = (await this.listEnvelopes()).filter((envelope) => envelope.rep.repId === repId);
+    if (!envelopes.length) return undefined;
+    return { rep: envelopes[0].rep, envelopes };
+  }
+
+  async getDocument(envelopeId, documentId) {
+    const envelope = await this.getEnvelopeRecord(envelopeId);
+    if (!envelope) return undefined;
+    const document = envelope.documents.find((item) => item.documentId === documentId);
+    if (!document?.storedName) return undefined;
+    const target = path.join(
+      this.root,
+      'envelopes',
+      safeSegment(envelopeId, 'envelope'),
+      'documents',
+      document.storedName,
+    );
+    try {
+      const information = await stat(target);
+      return {
+        document,
+        body: createReadStream(target),
+        contentLength: information.size,
+        contentType: target.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'application/octet-stream',
+      };
+    } catch (error) {
+      if (error.code === 'ENOENT') return undefined;
+      throw error;
+    }
   }
 }
 

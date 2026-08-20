@@ -6,9 +6,15 @@ import { createApp } from '../src/app.js';
 
 function fixture() {
   const calls = [];
-  const config = { docusign: { maxWebhookBytes: 100_000, hmacSecret: 'secret', requireHmac: true } };
+  const config = { docusign: { maxWebhookBytes: 100_000, hmacSecret: 'secret', requireHmac: true, repEmailDomain: 'capital-infusion.com' } };
   const storage = {
+    provider: 'filesystem',
     claim: async (event) => ({ claimed: true, file: '/event.json', event }),
+    listReps: async () => [],
+    listRepEnvelopes: async () => undefined,
+    listEnvelopes: async () => [],
+    getEnvelope: async () => undefined,
+    getDocument: async () => undefined,
   };
   const processor = { process: async (...args) => calls.push(args) };
   const auth = {
@@ -26,14 +32,21 @@ async function invoke(dependencies, { body = '', headers = {}, method = 'POST', 
   const request = Readable.from(body ? [Buffer.from(body)] : []);
   Object.assign(request, { headers, method, url });
   let status;
+  let responseHeaders;
   let contents = '';
   const response = {
     headersSent: false,
-    writeHead(value) { status = value; this.headersSent = true; },
+    writeHead(value, responseHeaderValues) { status = value; responseHeaders = responseHeaderValues; this.headersSent = true; },
+    write(value) { contents += Buffer.from(value).toString('binary'); },
     end(value = '') { contents += value; },
+    destroy(error) { throw error; },
   };
   await createApp(dependencies)(request, response);
-  return { status, body: contents ? JSON.parse(contents) : undefined };
+  let parsedBody;
+  if (contents) {
+    try { parsedBody = JSON.parse(contents); } catch { parsedBody = contents; }
+  }
+  return { status, body: parsedBody, headers: responseHeaders };
 }
 
 test('acknowledges completed events before scheduling processing', async () => {
@@ -146,4 +159,71 @@ test('reports missing R2 configuration without exposing configuration', async ()
     provider: 'filesystem',
     error: 'R2 configuration missing',
   });
+});
+
+test('lists reps with search and activity sorting', async () => {
+  const dependencies = fixture();
+  dependencies.storage.listReps = async () => [
+    { repId: 'old@capital-infusion.com', name: 'Old Rep', email: 'old@capital-infusion.com', completedEnvelopeCount: 4, latestCompletedAt: '2026-01-01' },
+    { repId: 'john@capital-infusion.com', name: 'John Smith', email: 'john@capital-infusion.com', completedEnvelopeCount: 2, latestCompletedAt: '2026-08-20' },
+  ];
+  const response = await invoke(dependencies, { method: 'GET', url: '/api/reps?search=john&sort=recent' });
+  assert.equal(response.status, 200);
+  assert.equal(response.body.reps.length, 1);
+  assert.equal(response.body.reps[0].repId, 'john@capital-infusion.com');
+});
+
+test('lists a rep envelopes newest first and validates rep IDs', async () => {
+  const dependencies = fixture();
+  dependencies.storage.listRepEnvelopes = async () => ({
+    rep: { repId: 'john@capital-infusion.com', type: 'internal', email: 'john@capital-infusion.com', name: 'John Smith' },
+    envelopes: [
+      { envelopeId: 'old', completedAt: '2026-01-01', primaryDocumentName: 'Old.pdf' },
+      { envelopeId: 'new', completedAt: '2026-08-20', primaryDocumentName: 'New.pdf' },
+    ],
+  });
+  const response = await invoke(dependencies, { method: 'GET', url: '/api/reps/john%40capital-infusion.com/envelopes' });
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body.envelopes.map((item) => item.envelopeId), ['new', 'old']);
+  const invalid = await invoke(dependencies, { method: 'GET', url: '/api/reps/not-an-email/envelopes' });
+  assert.equal(invalid.status, 400);
+});
+
+test('returns envelope detail and handles missing or corrupted metadata safely', async () => {
+  const dependencies = fixture();
+  dependencies.storage.getEnvelope = async () => ({ envelopeId: 'env-1', status: 'completed', documents: [] });
+  const found = await invoke(dependencies, { method: 'GET', url: '/api/docusign/envelopes/env-1' });
+  assert.equal(found.status, 200);
+  dependencies.storage.getEnvelope = async () => undefined;
+  assert.equal((await invoke(dependencies, { method: 'GET', url: '/api/docusign/envelopes/missing' })).status, 404);
+  dependencies.storage.getEnvelope = async () => { throw new Error('Corrupted envelope metadata'); };
+  const corrupted = await invoke(dependencies, { method: 'GET', url: '/api/docusign/envelopes/env-1' });
+  assert.equal(corrupted.status, 500);
+  assert.deepEqual(corrupted.body, { error: 'Corrupted envelope metadata' });
+});
+
+test('streams only document IDs validated against envelope metadata', async () => {
+  const dependencies = fixture();
+  dependencies.storage.getDocument = async (_envelopeId, documentId) => documentId === '1' ? {
+    document: { documentId: '1', name: 'Application.pdf' },
+    body: [Buffer.from('pdf-bytes')],
+    contentLength: 9,
+    contentType: 'application/pdf',
+  } : undefined;
+  const found = await invoke(dependencies, { method: 'GET', url: '/api/docusign/envelopes/env-1/documents/1?download=true' });
+  assert.equal(found.status, 200);
+  assert.equal(found.headers['content-disposition'], 'attachment; filename="Application.pdf"');
+  assert.equal(found.body, 'pdf-bytes');
+  assert.equal((await invoke(dependencies, { method: 'GET', url: '/api/docusign/envelopes/env-1/documents/unknown' })).status, 404);
+  assert.equal((await invoke(dependencies, { method: 'GET', url: '/api/docusign/envelopes/env-1/documents/%2Fetc' })).status, 400);
+});
+
+test('serves the rep-centric documents application routes', async () => {
+  const dependencies = fixture();
+  for (const url of ['/documents', '/documents/reps/john%40capital-infusion.com', '/documents/envelopes/env-1']) {
+    const response = await invoke(dependencies, { method: 'GET', url });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers['content-type'], 'text/html; charset=utf-8');
+    assert.equal(response.body.includes('DocuSign Documents'), true);
+  }
 });
