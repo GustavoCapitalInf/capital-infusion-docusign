@@ -49,3 +49,21 @@ test('generates safe, deterministic document filenames', () => {
   assert.equal(documentFilename({ documentId: '1', name: '../../Offer Letter.pdf' }), '1-Offer_Letter.pdf');
   assert.equal(documentFilename({ documentId: 'certificate', name: 'Summary' }), 'certificate-Summary.pdf');
 });
+
+test('persists filesystem contract lifecycles and claims each notification once', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'docusign-contracts-'));
+  const storage = new FileStorage(root);
+  await storage.updateRepContractLifecycle('rep@example.com', () => ({
+    repId: 'rep@example.com',
+    currentTier: 1,
+    contracts: [{ envelopeId: 'env-1' }],
+  }));
+  assert.equal((await storage.getRepContractLifecycle('rep@example.com')).currentTier, 1);
+  assert.equal((await storage.listContractLifecycles()).length, 1);
+  const notification = { notificationId: 'env-1:30', contractEnvelopeId: 'env-1', thresholdDays: 30 };
+  assert.equal(await storage.claimContractNotification(notification), true);
+  assert.equal(await storage.claimContractNotification(notification), false);
+  await storage.saveContractNotification({ ...notification, status: 'sent' });
+  const persisted = JSON.parse(await readFile(storage.notificationPath(notification.notificationId), 'utf8'));
+  assert.equal(persisted.status, 'sent');
+});

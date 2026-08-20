@@ -53,6 +53,7 @@ export class R2Storage {
     this.now = now;
     this.provider = 'r2';
     this.catalogQueue = Promise.resolve();
+    this.contractQueue = Promise.resolve();
   }
 
   eventKey(event) {
@@ -310,6 +311,85 @@ export class R2Storage {
         recipientResolution: identity.recipientResolution,
       };
     });
+  }
+
+  contractLifecycleKey(repId) {
+    return `${this.prefix}/contracts/reps/${encodeURIComponent(repId)}/lifecycle.json`;
+  }
+
+  async getRepContractLifecycle(repId) {
+    const record = await this.getJsonRecord(this.contractLifecycleKey(repId));
+    return record.value;
+  }
+
+  async saveRepContractLifecycle(repId, lifecycle) {
+    const operation = this.contractQueue.then(() =>
+      this.updateJsonIndex(this.contractLifecycleKey(repId), {}, () => lifecycle));
+    this.contractQueue = operation.catch(() => {});
+    return operation;
+  }
+
+  async updateRepContractLifecycle(repId, mutate) {
+    const operation = this.contractQueue.then(() =>
+      this.updateJsonIndex(this.contractLifecycleKey(repId), undefined, mutate));
+    this.contractQueue = operation.catch(() => {});
+    return operation;
+  }
+
+  async listContractLifecycles() {
+    const lifecycles = [];
+    let continuationToken;
+    do {
+      const result = await this.client.send(new ListObjectsV2Command({
+        Bucket: this.bucket,
+        Prefix: `${this.prefix}/contracts/reps/`,
+        Delimiter: '/',
+        ContinuationToken: continuationToken,
+      }));
+      for (const entry of result.CommonPrefixes || []) {
+        if (!entry.Prefix) continue;
+        try {
+          lifecycles.push(await this.getJson(`${entry.Prefix}lifecycle.json`));
+        } catch (error) {
+          if (!isNotFound(error) && !(error instanceof SyntaxError)) throw error;
+        }
+      }
+      continuationToken = result.IsTruncated ? result.NextContinuationToken : undefined;
+    } while (continuationToken);
+    return lifecycles;
+  }
+
+  contractNotificationKey(notificationId) {
+    return `${this.prefix}/contracts/notifications/${encodeURIComponent(notificationId)}.json`;
+  }
+
+  async claimContractNotification(notification) {
+    try {
+      await this.put(
+        this.contractNotificationKey(notification.notificationId),
+        `${JSON.stringify({ ...notification, status: 'processing' }, null, 2)}\n`,
+        { ContentType: 'application/json', IfNoneMatch: '*' },
+      );
+      return true;
+    } catch (error) {
+      if (isPreconditionFailed(error)) return false;
+      throw stageError(error, 'notification_claim');
+    }
+  }
+
+  async saveContractNotification(notification) {
+    await this.updateJsonIndex(this.contractNotificationKey(notification.notificationId), {}, () => notification);
+  }
+
+  async releaseContractNotification(notificationId) {
+    try {
+      await this.client.send(new DeleteObjectCommand({
+        Bucket: this.bucket,
+        Key: this.contractNotificationKey(notificationId),
+      }));
+    } catch (error) {
+      throw stageError(error, 'notification_release');
+    }
   }
 
   async rebuildIndexes() {

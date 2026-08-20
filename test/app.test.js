@@ -24,8 +24,13 @@ function fixture() {
       baseUri: 'https://demo.docusign.net',
     }),
   };
+  const contractLifecycle = {
+    enrichReps: async (reps) => reps,
+    listRenewals: async () => [],
+    getRepContract: async () => undefined,
+  };
   const logger = { info() {}, warn() {}, error() {} };
-  return { calls, config, storage, processor, auth, logger };
+  return { calls, config, storage, processor, auth, contractLifecycle, logger };
 }
 
 async function invoke(dependencies, { body = '', headers = {}, method = 'POST', url = '/api/webhooks/docusign' } = {}) {
@@ -171,6 +176,38 @@ test('lists reps with search and activity sorting', async () => {
   assert.equal(response.status, 200);
   assert.equal(response.body.reps.length, 1);
   assert.equal(response.body.reps[0].repId, 'john@capital-infusion.com');
+});
+
+test('returns contract lifecycle and upcoming renewals without changing envelope counts', async () => {
+  const dependencies = fixture();
+  const contract = {
+    repId: 'rep@example.com',
+    currentTier: 1,
+    nextTier: 2,
+    expiresAt: '2027-02-19T00:00:00Z',
+    daysRemaining: 30,
+    contracts: [],
+  };
+  dependencies.storage.listReps = async () => [{
+    repId: 'rep@example.com',
+    name: 'Example Rep',
+    email: 'rep@example.com',
+    completedEnvelopeCount: 5,
+  }];
+  dependencies.contractLifecycle.enrichReps = async (reps) => reps.map((rep) => ({ ...rep, contract }));
+  dependencies.contractLifecycle.getRepContract = async () => contract;
+  dependencies.contractLifecycle.listRenewals = async () => [{
+    repId: 'rep@example.com', currentTier: 1, nextTier: 2, expiresAt: contract.expiresAt, daysRemaining: 30,
+  }];
+  const reps = await invoke(dependencies, { method: 'GET', url: '/api/reps' });
+  assert.equal(reps.body.reps[0].completedEnvelopeCount, 5);
+  assert.equal(reps.body.reps[0].contract.currentTier, 1);
+  const detail = await invoke(dependencies, { method: 'GET', url: '/api/reps/REP%40EXAMPLE.COM/contract' });
+  assert.equal(detail.status, 200);
+  assert.equal(detail.body.nextTier, 2);
+  const renewals = await invoke(dependencies, { method: 'GET', url: '/api/contracts/renewals' });
+  assert.equal(renewals.status, 200);
+  assert.equal(renewals.body.renewals.length, 1);
 });
 
 test('lists a rep envelopes newest first and validates rep IDs', async () => {

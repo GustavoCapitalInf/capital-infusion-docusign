@@ -106,7 +106,7 @@ async function readBody(request, limit) {
   return Buffer.concat(chunks);
 }
 
-export function createApp({ config, storage, processor, auth, logger }) {
+export function createApp({ config, storage, processor, auth, contractLifecycle, logger }) {
   let latestHmacDiagnostics;
   return async function app(request, response) {
     const url = new URL(request.url, 'http://localhost');
@@ -170,8 +170,28 @@ export function createApp({ config, storage, processor, auth, logger }) {
       }
     }
     if (request.method === 'GET' && url.pathname === '/api/reps') {
+      return catalogResponse(response, logger, async () => {
+        const reps = await storage.listReps();
+        const enriched = contractLifecycle ? await contractLifecycle.enrichReps(reps) : reps;
+        return json(response, 200, { reps: filterAndSortReps(enriched, url) });
+      });
+    }
+    if (request.method === 'GET' && url.pathname === '/api/contracts/renewals') {
+      if (!contractLifecycle) return json(response, 200, { renewals: [] });
       return catalogResponse(response, logger, async () =>
-        json(response, 200, { reps: filterAndSortReps(await storage.listReps(), url) }));
+        json(response, 200, { renewals: await contractLifecycle.listRenewals(30) }));
+    }
+    const contractMatch = request.method === 'GET' && url.pathname.match(/^\/api\/reps\/([^/]+)\/contract$/);
+    if (contractMatch) {
+      const repId = normalizeRepId(safeDecode(contractMatch[1]));
+      if (!repId) return json(response, 400, { error: 'Invalid rep ID' });
+      if (!contractLifecycle) return json(response, 404, { error: 'Contract lifecycle not found' });
+      return catalogResponse(response, logger, async () => {
+        const contract = await contractLifecycle.getRepContract(repId);
+        return contract
+          ? json(response, 200, contract)
+          : json(response, 404, { error: 'Contract lifecycle not found' });
+      });
     }
     const repMatch = request.method === 'GET' && url.pathname.match(/^\/api\/reps\/([^/]+)\/envelopes$/);
     if (repMatch) {
@@ -181,7 +201,12 @@ export function createApp({ config, storage, processor, auth, logger }) {
       return catalogResponse(response, logger, async () => {
         const result = await storage.listRepEnvelopes(normalizedRepId);
         if (!result) return json(response, 404, { error: 'Rep not found' });
-        return json(response, 200, { rep: result.rep, envelopes: filterAndSortEnvelopes(result.envelopes, url) });
+        const contract = contractLifecycle ? await contractLifecycle.getRepContract(normalizedRepId) : undefined;
+        return json(response, 200, {
+          rep: result.rep,
+          contract,
+          envelopes: filterAndSortEnvelopes(result.envelopes, url),
+        });
       });
     }
     if (request.method === 'GET' && url.pathname === '/api/docusign/envelopes') {

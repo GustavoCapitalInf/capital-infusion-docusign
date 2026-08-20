@@ -31,6 +31,20 @@ test('uses Render PORT when provided', () => {
   assert.equal(loadConfig({ PORT: '10000' }).port, 10000);
 });
 
+test('loads contract reminder configuration without hardcoded provider secrets', () => {
+  const config = loadConfig({
+    CONTRACT_NOTIFICATION_EMAIL: ' notify@example.com ',
+    CONTRACT_EMAIL_FROM: ' Contracts <contracts@example.com> ',
+    RESEND_API_KEY: 'test-key',
+  });
+  assert.deepEqual(config.contracts, {
+    notificationEmail: 'notify@example.com',
+    emailProvider: 'resend',
+    emailFrom: 'Contracts <contracts@example.com>',
+    resendApiKey: 'test-key',
+  });
+});
+
 test('reports missing variable names without values', () => {
   const config = loadConfig({ DOCUSIGN_USER_ID: 'user-guid' }).docusign;
   assert.deepEqual(missingApiConfiguration(config), [

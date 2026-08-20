@@ -105,6 +105,10 @@ R2_ENDPOINT=https://<cloudflare-account-id>.r2.cloudflarestorage.com
 R2_BUCKET_NAME=capital-infusion-docusign
 R2_ACCESS_KEY_ID=<r2-access-key-id>
 R2_SECRET_ACCESS_KEY=<r2-secret-access-key>
+CONTRACT_NOTIFICATION_EMAIL=gustavo@capital-infusion.com
+CONTRACT_EMAIL_PROVIDER=resend
+CONTRACT_EMAIL_FROM=Capital Infusion Contracts <contracts@your-verified-domain.com>
+RESEND_API_KEY=<resend-api-key>
 ```
 
 Do not set `PORT` manually unless the Render service requires an override; Render
@@ -225,6 +229,70 @@ It uses the catalog APIs for rep search, rep/envelope sorting, detail views, and
 private PDF viewing/downloading. A normal refresh reflects indexes updated by the
 latest completed-envelope webhook.
 
+## Contract lifecycle and renewal reminders
+
+Only PDF names matching the case-insensitive, whitespace-tolerant
+`Capital Infusion - <Rep Name>.pdf` convention affect contract state. The completed
+signer's normalized email remains the rep ID; the name in the filename is never an
+identity key. Other envelope documents remain stored and counted normally.
+
+Contract state is stored separately from the immutable envelope/document layout:
+
+```text
+docusign/contracts/reps/{encodedRepId}/lifecycle.json
+docusign/contracts/notifications/{encodedEnvelopeIdAndThreshold}.json
+```
+
+Unique tracked envelopes are sorted by completion time. The first is Tier 1, the
+second Tier 2, and the third and later contracts remain Tier 3. Previous contracts
+remain in history as `superseded`; the newest is `active`. Expiration uses six UTC
+calendar months with end-of-month clamping, not 180 days. Multiple matching PDFs
+in one envelope create `requires_contract_resolution` without advancing a tier.
+
+Startup backfill reads existing envelope `metadata.json` files, uses the stored
+signer identity and document names, and reconstructs lifecycle history without
+downloading PDFs. It merges with any concurrently created lifecycle record and does
+not delete envelope or notification data.
+
+Lifecycle APIs:
+
+```text
+GET /api/reps/:repId/contract
+GET /api/contracts/renewals
+```
+
+`GET /api/reps` and `GET /api/reps/:repId/envelopes` also include safe contract
+summaries. Envelope counts continue to represent every completed envelope. The UI
+adds tier/expiration information, a renewal dashboard, and contract history without
+showing compensation data.
+
+### Daily reminder job
+
+The email adapter uses Resend's HTTP API. Configure a verified sender in
+`CONTRACT_EMAIL_FROM`, the destination in `CONTRACT_NOTIFICATION_EMAIL`, and the API
+secret in `RESEND_API_KEY`. Secrets must be Render environment variables, never
+source-controlled.
+
+Create a Render Cron Job from this repository with:
+
+```text
+Command:  npm run contract-reminders
+Schedule: 0 13 * * *
+```
+
+Render evaluates schedules in UTC, so this runs daily at 13:00 UTC. Give the cron
+job the same `R2_*` variables as the web service plus the four contract-email
+variables above. The command performs one scan and exits; it does not start the web
+server.
+
+Tier 1 and Tier 2 contracts use 30/15/7/0-day thresholds. If a run is missed, only
+the nearest crossed threshold is eligible: 14 days remaining selects the 15-day
+reminder and never the older 30-day reminder. Each send first conditionally creates
+the persistent `{envelopeId}:{threshold}` notification record. The same identity is
+also sent as Resend's `Idempotency-Key`, and successful delivery changes the record
+to `sent`. Logs contain counts, rep ID, and threshold only—never document bodies or
+provider credentials.
+
 Startup reports only the names of missing DocuSign variables. It does not print
 their values, and `/health` remains available while DocuSign processing is being
 configured.
@@ -266,4 +334,6 @@ Useful DocuSign references:
 - [JWT Grant authentication](https://developers.docusign.com/platform/auth/jwt/)
 - [eSignature REST API](https://developers.docusign.com/docs/esign-rest-api/)
 - [Render environment variables and secret files](https://render.com/docs/configure-environment-variables)
+- [Render Cron Jobs](https://render.com/docs/cronjobs)
 - [Render persistent disks](https://render.com/docs/disks)
+- [Resend send-email API and idempotency header](https://resend.com/docs/api-reference/emails/send-email)

@@ -277,6 +277,26 @@ test('handles unassigned reps and corrupted metadata safely', async () => {
   await assert.rejects(storage.getEnvelope('broken'), /Corrupted envelope metadata/);
 });
 
+test('persists R2 contract lifecycles and conditionally claims reminder notifications', async () => {
+  const client = new MemoryS3Client();
+  const storage = new R2Storage({ client, bucket: 'private-bucket' });
+  await storage.updateRepContractLifecycle('rep@example.com', () => ({
+    repId: 'rep@example.com',
+    currentTier: 1,
+    contracts: [{ envelopeId: 'env-1' }],
+  }));
+  assert.equal((await storage.getRepContractLifecycle('rep@example.com')).currentTier, 1);
+  assert.equal((await storage.listContractLifecycles()).length, 1);
+  const notification = { notificationId: 'env-1:30', contractEnvelopeId: 'env-1', thresholdDays: 30 };
+  assert.equal(await storage.claimContractNotification(notification), true);
+  assert.equal(await storage.claimContractNotification(notification), false);
+  await storage.saveContractNotification({ ...notification, status: 'sent' });
+  const key = 'docusign/contracts/notifications/env-1%3A30.json';
+  assert.equal(JSON.parse(client.objects.get(key).Body).status, 'sent');
+  const claims = client.commands.filter(({ name, input }) => name === 'PutObjectCommand' && input.Key === key);
+  assert.equal(claims.some(({ input }) => input.IfNoneMatch === '*'), true);
+});
+
 test('uses conditional R2 locks to prevent duplicate event processing', async () => {
   const client = new MemoryS3Client();
   const storage = new R2Storage({ client, bucket: 'private-bucket' });

@@ -13,10 +13,11 @@ function envelopeSender(envelope, webhookEmail) {
 }
 
 export class CompletedEnvelopeProcessor {
-  constructor({ client, storage, allowedSenders, logger }) {
+  constructor({ client, storage, allowedSenders, contractLifecycle, logger }) {
     this.client = client;
     this.storage = storage;
     this.allowedSenders = allowedSenders;
+    this.contractLifecycle = contractLifecycle;
     this.logger = logger;
   }
 
@@ -72,6 +73,12 @@ export class CompletedEnvelopeProcessor {
         rep,
         repSource: 'completed_signer',
         recipientResolution: resolution,
+      });
+      await this.contractLifecycle?.recordCompletedEnvelope({
+        envelopeId: event.envelopeId,
+        rep,
+        completedAt: envelope.completedDateTime || event.timestamp,
+        documents: saved,
       });
       await this.storage.updateEvent(eventFile, {
         status: 'processed',

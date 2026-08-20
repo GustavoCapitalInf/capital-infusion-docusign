@@ -7,6 +7,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
+    "contract-reminders": "node src/contract-reminders.js",
     "test": "node --test"
   },
   "engines": {

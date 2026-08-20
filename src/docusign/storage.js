@@ -35,6 +35,7 @@ export class FileStorage {
   constructor(root) {
     this.root = root;
     this.provider = 'filesystem';
+    this.contractQueues = new Map();
   }
 
   eventPath(event) {
@@ -187,6 +188,99 @@ export class FileStorage {
 
   async rebuildIndexes() {
     // Filesystem catalog views are derived from metadata.json on each request.
+  }
+
+  contractLifecyclePath(repId) {
+    return path.join(this.root, 'contracts', 'reps', encodeURIComponent(repId), 'lifecycle.json');
+  }
+
+  async getRepContractLifecycle(repId) {
+    try {
+      return JSON.parse(await readFile(this.contractLifecyclePath(repId), 'utf8'));
+    } catch (error) {
+      if (error.code === 'ENOENT') return undefined;
+      if (error instanceof SyntaxError) throw new Error('Corrupted contract lifecycle');
+      throw error;
+    }
+  }
+
+  async writeRepContractLifecycle(repId, lifecycle) {
+    const file = this.contractLifecyclePath(repId);
+    await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+    await atomicJson(file, lifecycle);
+    return lifecycle;
+  }
+
+  async queueContractOperation(repId, action) {
+    const previous = this.contractQueues.get(repId) || Promise.resolve();
+    const operation = previous.then(action);
+    const queued = operation.catch(() => {});
+    this.contractQueues.set(repId, queued);
+    return operation.finally(() => {
+      if (this.contractQueues.get(repId) === queued) this.contractQueues.delete(repId);
+    });
+  }
+
+  async saveRepContractLifecycle(repId, lifecycle) {
+    return this.queueContractOperation(repId, () => this.writeRepContractLifecycle(repId, lifecycle));
+  }
+
+  async updateRepContractLifecycle(repId, mutate) {
+    return this.queueContractOperation(repId, async () => {
+      const current = await this.getRepContractLifecycle(repId);
+      const next = mutate(current);
+      if (!next || next === current) return current;
+      return this.writeRepContractLifecycle(repId, next);
+    });
+  }
+
+  async listContractLifecycles() {
+    const root = path.join(this.root, 'contracts', 'reps');
+    let entries;
+    try {
+      entries = await readdir(root, { withFileTypes: true });
+    } catch (error) {
+      if (error.code === 'ENOENT') return [];
+      throw error;
+    }
+    const lifecycles = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      try {
+        lifecycles.push(JSON.parse(await readFile(path.join(root, entry.name, 'lifecycle.json'), 'utf8')));
+      } catch (error) {
+        if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
+      }
+    }
+    return lifecycles;
+  }
+
+  notificationPath(notificationId) {
+    return path.join(this.root, 'contracts', 'notifications', `${encodeURIComponent(notificationId)}.json`);
+  }
+
+  async claimContractNotification(notification) {
+    const file = this.notificationPath(notification.notificationId);
+    await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+    try {
+      const handle = await open(file, 'wx', 0o600);
+      await handle.writeFile(`${JSON.stringify({ ...notification, status: 'processing' }, null, 2)}\n`);
+      await handle.close();
+      return true;
+    } catch (error) {
+      if (error.code === 'EEXIST') return false;
+      throw error;
+    }
+  }
+
+  async saveContractNotification(notification) {
+    await atomicJson(this.notificationPath(notification.notificationId), notification);
+  }
+
+  async releaseContractNotification(notificationId) {
+    await unlink(this.notificationPath(notificationId)).catch((error) => {
+      if (error.code !== 'ENOENT') throw error;
+    });
   }
 
   async getEnvelope(envelopeId) {

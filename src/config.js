@@ -50,6 +50,12 @@ export function loadConfig(environment = process.env) {
       accessKeyId: string(environment.R2_ACCESS_KEY_ID),
       secretAccessKey: string(environment.R2_SECRET_ACCESS_KEY),
     },
+    contracts: {
+      notificationEmail: string(environment.CONTRACT_NOTIFICATION_EMAIL),
+      emailProvider: string(environment.CONTRACT_EMAIL_PROVIDER, 'resend').toLowerCase(),
+      emailFrom: string(environment.CONTRACT_EMAIL_FROM),
+      resendApiKey: string(environment.RESEND_API_KEY),
+    },
   };
 }
 
