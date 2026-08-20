@@ -52,7 +52,8 @@ export function loadConfig(environment = process.env) {
     },
     contracts: {
       notificationEmail: string(environment.CONTRACT_NOTIFICATION_EMAIL),
-      emailProvider: string(environment.CONTRACT_EMAIL_PROVIDER, 'resend').toLowerCase(),
+      emailProvider: string(environment.CONTRACT_EMAIL_PROVIDER, 'power-automate').toLowerCase(),
+      powerAutomateUrl: string(environment.CONTRACT_POWER_AUTOMATE_URL),
       emailFrom: string(environment.CONTRACT_EMAIL_FROM),
       resendApiKey: string(environment.RESEND_API_KEY),
     },

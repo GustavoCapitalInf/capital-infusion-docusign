@@ -34,14 +34,14 @@ test('uses Render PORT when provided', () => {
 test('loads contract reminder configuration without hardcoded provider secrets', () => {
   const config = loadConfig({
     CONTRACT_NOTIFICATION_EMAIL: ' notify@example.com ',
-    CONTRACT_EMAIL_FROM: ' Contracts <contracts@example.com> ',
-    RESEND_API_KEY: 'test-key',
+    CONTRACT_POWER_AUTOMATE_URL: ' https://example.invalid/flow?sig=secret ',
   });
   assert.deepEqual(config.contracts, {
     notificationEmail: 'notify@example.com',
-    emailProvider: 'resend',
-    emailFrom: 'Contracts <contracts@example.com>',
-    resendApiKey: 'test-key',
+    emailProvider: 'power-automate',
+    powerAutomateUrl: 'https://example.invalid/flow?sig=secret',
+    emailFrom: '',
+    resendApiKey: '',
   });
 });
 

@@ -205,3 +205,33 @@ test('retains a notification claim if delivery succeeds but final persistence fa
   assert.equal(result.failed, 1);
   assert.equal(released, false);
 });
+
+test('releases a notification claim when provider delivery fails so it remains retryable', async () => {
+  const released = [];
+  const saved = [];
+  const lifecycle = buildContractLifecycle(rep, [envelope('A', '2026-08-19T00:00:00Z')]);
+  const service = new ContractLifecycleService({
+    storage: {
+      listContractLifecycles: async () => [lifecycle],
+      claimContractNotification: async () => true,
+      saveContractNotification: async (notification) => saved.push(notification),
+      releaseContractNotification: async (notificationId) => released.push(notificationId),
+    },
+    logger: { info() {}, warn() {} },
+    now: () => new Date('2027-01-20T12:00:00Z'),
+  });
+  const result = await service.sendEligibleReminders({
+    emailProvider: {
+      assertConfigured() {},
+      sendContractReminder: async () => {
+        const error = new Error('provider unavailable');
+        error.code = 'contract_email_delivery_failed';
+        throw error;
+      },
+    },
+    recipient: 'notify@example.com',
+  });
+  assert.equal(result.failed, 1);
+  assert.deepEqual(released, ['A:30']);
+  assert.deepEqual(saved, []);
+});

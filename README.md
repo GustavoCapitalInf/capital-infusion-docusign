@@ -106,9 +106,8 @@ R2_BUCKET_NAME=capital-infusion-docusign
 R2_ACCESS_KEY_ID=<r2-access-key-id>
 R2_SECRET_ACCESS_KEY=<r2-secret-access-key>
 CONTRACT_NOTIFICATION_EMAIL=gustavo@capital-infusion.com
-CONTRACT_EMAIL_PROVIDER=resend
-CONTRACT_EMAIL_FROM=Capital Infusion Contracts <contracts@your-verified-domain.com>
-RESEND_API_KEY=<resend-api-key>
+CONTRACT_EMAIL_PROVIDER=power-automate
+CONTRACT_POWER_AUTOMATE_URL=<secret-http-trigger-url>
 ```
 
 Do not set `PORT` manually unless the Render service requires an override; Render
@@ -268,10 +267,40 @@ showing compensation data.
 
 ### Daily reminder job
 
-The email adapter uses Resend's HTTP API. Configure a verified sender in
-`CONTRACT_EMAIL_FROM`, the destination in `CONTRACT_NOTIFICATION_EMAIL`, and the API
-secret in `RESEND_API_KEY`. Secrets must be Render environment variables, never
-source-controlled.
+The active email adapter calls a Power Automate HTTP-triggered flow, which sends the
+message through Outlook. Keep the signed trigger URL only in the secret Render
+environment variable `CONTRACT_POWER_AUTOMATE_URL`; do not place it in source code,
+browser code, or logs. `CONTRACT_NOTIFICATION_EMAIL` identifies the configured
+destination and must match the recipient selected in the Outlook action.
+
+Configure the flow as:
+
+```text
+When an HTTP request is received
+        ↓
+Send an email (V2)
+        ↓
+Response
+```
+
+The application sends this JSON body:
+
+```json
+{
+  "repName": "Example Representative",
+  "repEmail": "representative@example.com",
+  "daysRemaining": 30,
+  "expirationDate": "2027-02-20",
+  "currentTier": 1,
+  "nextTier": 2,
+  "notificationId": "envelope-id:30"
+}
+```
+
+Configure the Response action to return any 2xx status and either no body or a JSON
+body such as `{ "success": true }`. A 2xx response containing
+`{ "success": false }`, any non-2xx response, network error, or request timeout is a
+failed delivery and remains eligible for retry.
 
 Create a Render Cron Job from this repository with:
 
@@ -281,17 +310,36 @@ Schedule: 0 13 * * *
 ```
 
 Render evaluates schedules in UTC, so this runs daily at 13:00 UTC. Give the cron
-job the same `R2_*` variables as the web service plus the four contract-email
-variables above. The command performs one scan and exits; it does not start the web
-server.
+job the same `R2_*` variables as the web service plus
+`CONTRACT_EMAIL_PROVIDER`, `CONTRACT_POWER_AUTOMATE_URL`, and
+`CONTRACT_NOTIFICATION_EMAIL`. The command performs one scan and exits; it does not
+start the web server.
+
+To test only the selected email provider without creating a rep, lifecycle, or
+notification record, run:
+
+```text
+npm run contract-email-test
+```
+
+This sends one clearly labeled example reminder through the configured provider.
+It logs only the provider name, safe result status, and safe error code. It never
+prints the trigger URL or payload credentials.
 
 Tier 1 and Tier 2 contracts use 30/15/7/0-day thresholds. If a run is missed, only
 the nearest crossed threshold is eligible: 14 days remaining selects the 15-day
 reminder and never the older 30-day reminder. Each send first conditionally creates
 the persistent `{envelopeId}:{threshold}` notification record. The same identity is
-also sent as Resend's `Idempotency-Key`, and successful delivery changes the record
-to `sent`. Logs contain counts, rep ID, and threshold only—never document bodies or
-provider credentials.
+included in the Power Automate payload, and successful delivery changes the record
+to `sent`. Provider failures release the claim so the reminder can be retried;
+after provider acknowledgement, a later persistence failure retains the claim to
+avoid a duplicate email. Logs contain counts, rep ID, and threshold only—never
+document bodies or provider credentials.
+
+Resend remains available as an optional fallback. Select it explicitly with
+`CONTRACT_EMAIL_PROVIDER=resend` and configure `CONTRACT_EMAIL_FROM` plus
+`RESEND_API_KEY`. Those variables are not required when `power-automate` is
+selected.
 
 Startup reports only the names of missing DocuSign variables. It does not print
 their values, and `/health` remains available while DocuSign processing is being
@@ -336,4 +384,5 @@ Useful DocuSign references:
 - [Render environment variables and secret files](https://render.com/docs/configure-environment-variables)
 - [Render Cron Jobs](https://render.com/docs/cronjobs)
 - [Render persistent disks](https://render.com/docs/disks)
-- [Resend send-email API and idempotency header](https://resend.com/docs/api-reference/emails/send-email)
+- [Power Automate data operations and HTTP request trigger](https://learn.microsoft.com/en-us/power-automate/data-operations)
+- [Office 365 Outlook Send an email (V2)](https://learn.microsoft.com/en-us/connectors/office365connector/)

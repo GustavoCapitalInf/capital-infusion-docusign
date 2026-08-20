@@ -10,6 +10,7 @@ const storage = createStorageProvider(config);
 const contractLifecycle = new ContractLifecycleService({ storage, logger });
 const emailProvider = createContractEmailProvider({
   provider: config.contracts.emailProvider,
+  powerAutomateUrl: config.contracts.powerAutomateUrl,
   from: config.contracts.emailFrom,
   resendApiKey: config.contracts.resendApiKey,
 });
