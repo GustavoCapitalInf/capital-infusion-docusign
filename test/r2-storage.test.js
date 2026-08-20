@@ -174,6 +174,7 @@ test('lists reps, rep envelopes, global envelopes, details, and validated privat
   assert.equal((await storage.listEnvelopes())[0].rep.name, 'John Smith');
   const envelope = await storage.getEnvelope('env-1');
   assert.deepEqual(envelope.documents.map((item) => item.classification), ['signed_document', 'certificate']);
+  assert.deepEqual(envelope.documents.map((item) => item.bytes), [11, 11]);
   assert.equal(envelope.documents.some((item) => item.objectKey || item.storedName), false);
   const document = await storage.getDocument('env-1', '1');
   assert.equal(document.contentLength, 11);

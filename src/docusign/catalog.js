@@ -68,6 +68,7 @@ export function publicEnvelope(envelope) {
       documentId: document.documentId,
       name: document.name,
       classification: document.classification,
+      bytes: document.bytes,
     })),
     recipientResolution: envelope.recipientResolution,
   };

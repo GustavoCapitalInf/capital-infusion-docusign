@@ -287,6 +287,6 @@ test('serves the rep-centric documents application routes', async () => {
     const response = await invoke(dependencies, { method: 'GET', url });
     assert.equal(response.status, 200);
     assert.equal(response.headers['content-type'], 'text/html; charset=utf-8');
-    assert.equal(response.body.includes('Rep Contract Management'), true);
+    assert.equal(response.body.includes('Contract Management'), true);
   }
 });

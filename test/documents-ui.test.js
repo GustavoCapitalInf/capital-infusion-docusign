@@ -2,10 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   attentionContracts,
+  avatarInitials,
   contractStatus,
   dashboardSummary,
   documentPresentation,
   documentsPage,
+  formatFileSize,
   primaryAgreementName,
   upcomingContracts,
 } from '../src/documents-ui.js';
@@ -82,45 +84,79 @@ test('agreement title prefers the signed business document name', () => {
 
 test('signed documents, certificates, and supplemental files have distinct presentation', () => {
   assert.deepEqual(documentPresentation('signed_document'), {
-    key: 'signed', badge: 'Signed Document', heading: 'Employment Contract',
+    key: 'signed', badge: 'Signed Document', heading: 'Employment Agreement',
   });
   assert.deepEqual(documentPresentation('certificate'), {
-    key: 'certificate', badge: 'Certificate', heading: 'Completion Certificate',
+    key: 'certificate', badge: 'Certificate', heading: 'DocuSign Certificate',
   });
   assert.equal(documentPresentation('supplemental').badge, 'Supplemental');
 });
 
+test('avatars and safe file sizes use compact CapLink row formatting', () => {
+  assert.equal(avatarInitials('Sarah Fondeur'), 'SF');
+  assert.equal(avatarInitials('Gustavo Prieto de Paula'), 'GP');
+  assert.equal(formatFileSize(512), '512 B');
+  assert.equal(formatFileSize(132_096), '129 KB');
+  assert.equal(formatFileSize(undefined), '');
+});
+
 test('dashboard and detail views include required human-facing sections and empty states', () => {
   for (const text of [
-    'Rep Contract Management',
+    'Contract Management',
     'Needs Attention',
     'Upcoming Renewals',
-    'All Representatives',
+    'Representatives',
     'Contract Status',
     'Contract History',
-    'Documents &amp; Agreements',
+    'Documents & Agreements',
     'Advanced Details',
-    'No reps found.',
-    'No contracts currently require action.',
+    'No representatives found.',
+    'No contracts currently require attention.',
     'No upcoming renewals.',
-    'No completed documents for this rep.',
+    'No completed documents for this representative.',
   ]) assert.equal(documentsPage.includes(text), true, `missing ${text}`);
 });
 
-test('rep and agreement rows are full keyboard-focusable links with clear affordances', () => {
-  assert.equal(documentsPage.includes('class="card card-link rep-card"'), true);
-  assert.equal(documentsPage.includes('class="card card-link agreement-card"'), true);
-  assert.equal(documentsPage.includes('aria-label="View '), true);
-  assert.equal(documentsPage.includes('aria-label="Open '), true);
+test('CapLink app shell, sidebar, active navigation, and reusable row components render', () => {
+  assert.equal(documentsPage.includes('class="app-shell"'), true);
+  assert.equal(documentsPage.includes('class="sidebar"'), true);
+  assert.equal(documentsPage.includes('class="topbar"'), true);
+  for (const item of ['Overview', 'Representatives', 'Contracts', 'Documents', 'Settings']) {
+    assert.equal(documentsPage.includes(item), true);
+  }
+  for (const component of ['function PageHeader', 'function Panel', 'function StatCard', 'function RepRow',
+    'function AgreementRow', 'function DocumentRow', 'function EmptyState', 'function DetailsDisclosure']) {
+    assert.equal(documentsPage.includes(component), true, `missing ${component}`);
+  }
+  assert.equal(documentsPage.includes("classList.toggle('active'"), true);
+});
+
+test('rep and agreement rows remain full keyboard-focusable links with clear affordances', () => {
+  assert.equal(documentsPage.includes('function DataRow'), true);
+  assert.equal(documentsPage.includes("ariaLabel:'View '"), true);
+  assert.equal(documentsPage.includes("ariaLabel:'Open '"), true);
   assert.equal(documentsPage.includes('aria-hidden="true">›'), true);
   assert.equal(documentsPage.includes(':focus-visible'), true);
 });
 
-test('page includes accessibility landmarks and meaningful document actions without storage keys', () => {
+test('rep tabs have keyboard behavior and associated tab panels', () => {
+  assert.equal(documentsPage.includes('role="tablist"'), true);
+  assert.equal(documentsPage.includes('role="tab"'), true);
+  assert.equal(documentsPage.includes('role="tabpanel"'), true);
+  assert.equal(documentsPage.includes("event.key==='ArrowRight'"), true);
+  assert.equal(documentsPage.includes("event.key==='ArrowLeft'"), true);
+  assert.equal(documentsPage.includes("aria-selected"), true);
+});
+
+test('page includes accessible shell controls and meaningful document actions without storage keys', () => {
   assert.equal(documentsPage.includes('Skip to main content'), true);
-  assert.equal(documentsPage.includes('aria-labelledby='), true);
-  assert.equal(documentsPage.includes('aria-label="View '+"'"), true);
-  assert.equal(documentsPage.includes('aria-label="Download '+"'"), true);
+  assert.equal(documentsPage.includes('aria-label="Application navigation"'), true);
+  assert.equal(documentsPage.includes('aria-controls="sidebar"'), true);
+  assert.equal(documentsPage.includes('aria-expanded="false"'), true);
+  assert.equal(documentsPage.includes("PrimaryButton('View PDF'"), true);
+  assert.equal(documentsPage.includes("SecondaryButton('Download'"), true);
+  assert.equal(documentsPage.includes('details-disclosure'), true);
   assert.equal(documentsPage.includes('objectKey'), false);
+  assert.equal(documentsPage.includes('storedName'), false);
   assert.equal(documentsPage.includes('R2_'), false);
 });
