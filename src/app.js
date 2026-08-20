@@ -48,6 +48,15 @@ function filterAndSortReps(reps, url) {
   return filtered.sort((a, b) => {
     if (sort === 'name') return String(a.name || '').localeCompare(String(b.name || ''));
     if (sort === 'count') return b.completedEnvelopeCount - a.completedEnvelopeCount;
+    if (sort === 'expiration') {
+      const aExpiration = a.contract?.expiresAt;
+      const bExpiration = b.contract?.expiresAt;
+      if (!aExpiration && !bExpiration) return String(a.name || '').localeCompare(String(b.name || ''));
+      if (!aExpiration) return 1;
+      if (!bExpiration) return -1;
+      return String(aExpiration).localeCompare(String(bExpiration))
+        || String(a.name || '').localeCompare(String(b.name || ''));
+    }
     return String(b.latestCompletedAt || '').localeCompare(String(a.latestCompletedAt || ''));
   });
 }

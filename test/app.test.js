@@ -178,6 +178,27 @@ test('lists reps with search and activity sorting', async () => {
   assert.equal(response.body.reps[0].repId, 'john@capital-infusion.com');
 });
 
+test('sorts tracked contracts by expiration with reps without contracts last', async () => {
+  const dependencies = fixture();
+  dependencies.storage.listReps = async () => [
+    { repId: 'none@example.com', name: 'No Contract', completedEnvelopeCount: 1 },
+    { repId: 'later@example.com', name: 'Later', completedEnvelopeCount: 1 },
+    { repId: 'sooner@example.com', name: 'Sooner', completedEnvelopeCount: 1 },
+  ];
+  dependencies.contractLifecycle.enrichReps = async (reps) => reps.map((item) => ({
+    ...item,
+    contract: item.repId === 'none@example.com' ? undefined : {
+      expiresAt: item.repId === 'sooner@example.com' ? '2027-01-01' : '2027-03-01',
+    },
+  }));
+  const response = await invoke(dependencies, { method: 'GET', url: '/api/reps?sort=expiration' });
+  assert.deepEqual(response.body.reps.map((item) => item.repId), [
+    'sooner@example.com',
+    'later@example.com',
+    'none@example.com',
+  ]);
+});
+
 test('returns contract lifecycle and upcoming renewals without changing envelope counts', async () => {
   const dependencies = fixture();
   const contract = {
@@ -266,6 +287,6 @@ test('serves the rep-centric documents application routes', async () => {
     const response = await invoke(dependencies, { method: 'GET', url });
     assert.equal(response.status, 200);
     assert.equal(response.headers['content-type'], 'text/html; charset=utf-8');
-    assert.equal(response.body.includes('DocuSign Documents'), true);
+    assert.equal(response.body.includes('Rep Contract Management'), true);
   }
 });
