@@ -117,18 +117,20 @@ test('dashboard and detail views include required human-facing sections and empt
   ]) assert.equal(documentsPage.includes(text), true, `missing ${text}`);
 });
 
-test('CapLink app shell, sidebar, active navigation, and reusable row components render', () => {
+test('CapLink app shell, simplified topbar, and reusable row components render', () => {
   assert.equal(documentsPage.includes('class="app-shell"'), true);
-  assert.equal(documentsPage.includes('class="sidebar"'), true);
   assert.equal(documentsPage.includes('class="topbar"'), true);
-  for (const item of ['Overview', 'Representatives', 'Contracts', 'Documents', 'Settings']) {
-    assert.equal(documentsPage.includes(item), true);
-  }
+  assert.equal(documentsPage.includes('<strong>Contract Management</strong>'), true);
+  assert.equal(documentsPage.includes('<span>Capital Infusion</span>'), true);
+  assert.equal(documentsPage.includes('class="sidebar"'), false);
+  assert.equal(documentsPage.includes('id="menu-toggle"'), false);
+  assert.equal(documentsPage.includes('Internal Operations'), false);
+  assert.equal(documentsPage.includes('Company workspace'), false);
+  assert.equal(documentsPage.includes('Internal operations workspace'), false);
   for (const component of ['function PageHeader', 'function Panel', 'function StatCard', 'function RepRow',
     'function AgreementRow', 'function DocumentRow', 'function EmptyState', 'function DetailsDisclosure']) {
     assert.equal(documentsPage.includes(component), true, `missing ${component}`);
   }
-  assert.equal(documentsPage.includes("classList.toggle('active'"), true);
 });
 
 test('rep and agreement rows remain full keyboard-focusable links with clear affordances', () => {
@@ -150,9 +152,8 @@ test('rep tabs have keyboard behavior and associated tab panels', () => {
 
 test('page includes accessible shell controls and meaningful document actions without storage keys', () => {
   assert.equal(documentsPage.includes('Skip to main content'), true);
-  assert.equal(documentsPage.includes('aria-label="Application navigation"'), true);
-  assert.equal(documentsPage.includes('aria-controls="sidebar"'), true);
-  assert.equal(documentsPage.includes('aria-expanded="false"'), true);
+  assert.equal(documentsPage.includes('<main class="content" id="main-content"'), true);
+  assert.equal(documentsPage.includes('aria-label="Application navigation"'), false);
   assert.equal(documentsPage.includes("PrimaryButton('View PDF'"), true);
   assert.equal(documentsPage.includes("SecondaryButton('Download'"), true);
   assert.equal(documentsPage.includes('details-disclosure'), true);
