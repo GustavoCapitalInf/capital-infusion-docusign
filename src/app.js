@@ -131,6 +131,7 @@ export function createApp({ config, storage, processor, auth, contractLifecycle,
         logger.info('DocuSign JWT authentication test succeeded', {
           accountId: result.accountId,
           baseUri: result.baseUri,
+          apiStatus: result.apiStatus,
         });
         return json(response, 200, {
           success: true,
@@ -138,6 +139,8 @@ export function createApp({ config, storage, processor, auth, contractLifecycle,
           accountId: result.accountId,
           accountName: result.accountName,
           baseUri: result.baseUri,
+          apiStatus: result.apiStatus,
+          apiReadSucceeded: result.apiReadSucceeded,
         });
       } catch (error) {
         const safeError = error.code || 'authentication_test_failed';
@@ -154,7 +157,8 @@ export function createApp({ config, storage, processor, auth, contractLifecycle,
           message: error.message,
           privateKeyLoaded: error.privateKeyLoaded ?? false,
           privateKeyParsed: error.privateKeyParsed ?? false,
-          userInfoSucceeded: false,
+          userInfoSucceeded: error.userInfoSucceeded ?? false,
+          ...(error.apiStatus ? { apiStatus: error.apiStatus } : {}),
         });
       }
     }

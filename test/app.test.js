@@ -22,6 +22,8 @@ function fixture() {
       accountId: 'account-1',
       accountName: 'Capital Infusion',
       baseUri: 'https://demo.docusign.net',
+      apiStatus: 200,
+      apiReadSucceeded: true,
     }),
   };
   const contractLifecycle = {
@@ -103,6 +105,8 @@ test('returns only safe account fields from the auth diagnostic', async () => {
     accountId: 'account-1',
     accountName: 'Capital Infusion',
     baseUri: 'https://demo.docusign.net',
+    apiStatus: 200,
+    apiReadSucceeded: true,
   });
   assert.equal(JSON.stringify(response.body).includes('token'), false);
 });

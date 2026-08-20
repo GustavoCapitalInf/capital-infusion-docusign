@@ -57,13 +57,16 @@ test('tests JWT authentication and returns only selected userinfo account fields
       if (url.endsWith('/oauth/token')) {
         return Response.json({ access_token: 'never-return-this-token', expires_in: 3600 });
       }
-      return Response.json({
-        sub: 'do-not-return-user-profile',
-        accounts: [
-          { account_id: 'other-account', account_name: 'Other', base_uri: 'https://other.example', is_default: true },
-          { account_id: 'selected-account', account_name: 'Capital Infusion', base_uri: 'https://demo.docusign.net' },
-        ],
-      });
+      if (url.endsWith('/oauth/userinfo')) {
+        return Response.json({
+          sub: 'do-not-return-user-profile',
+          accounts: [
+            { account_id: 'other-account', account_name: 'Other', base_uri: 'https://other.example', is_default: true },
+            { account_id: 'selected-account', account_name: 'Capital Infusion', base_uri: 'https://demo.docusign.net' },
+          ],
+        });
+      }
+      return Response.json({ accountIdGuid: 'selected-account' });
     },
   });
 
@@ -71,11 +74,47 @@ test('tests JWT authentication and returns only selected userinfo account fields
     accountId: 'selected-account',
     accountName: 'Capital Infusion',
     baseUri: 'https://demo.docusign.net',
+    apiStatus: 200,
+    apiReadSucceeded: true,
     privateKeyLoaded: true,
     privateKeyParsed: true,
   });
   assert.equal(requests[1].url, 'https://account-d.docusign.com/oauth/userinfo');
   assert.equal(requests[1].options.headers.authorization, 'Bearer never-return-this-token');
+  assert.equal(requests[2].url, 'https://demo.docusign.net/restapi/v2.1/accounts/selected-account');
+  assert.equal(requests[2].options.headers.authorization, 'Bearer never-return-this-token');
+});
+
+test('reports a safe eSignature API failure without exposing the response body', async () => {
+  const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const auth = new DocusignJwtAuth({
+    integrationKey: 'integration-key',
+    userId: 'user-guid',
+    accountId: 'selected-account',
+    privateKeyPath: '/secret.key',
+    authServer: 'account.docusign.com',
+  }, {
+    readFile: async () => privateKey.export({ type: 'pkcs8', format: 'pem' }),
+    fetch: async (url) => {
+      if (url.endsWith('/oauth/token')) return Response.json({ access_token: 'secret-token', expires_in: 3600 });
+      if (url.endsWith('/oauth/userinfo')) {
+        return Response.json({ accounts: [{
+          account_id: 'selected-account',
+          account_name: 'Capital Infusion',
+          base_uri: 'https://na3.docusign.net',
+        }] });
+      }
+      return Response.json({ message: 'do not expose upstream details' }, { status: 403 });
+    },
+  });
+
+  await assert.rejects(auth.testAuthentication(), (error) => {
+    assert.equal(error.code, 'esign_api_failed');
+    assert.equal(error.apiStatus, 403);
+    assert.equal(error.userInfoSucceeded, true);
+    assert.equal(error.message, 'DocuSign account information request failed with HTTP 403');
+    return true;
+  });
 });
 
 test('returns a safe error code when the RSA key file is missing', async () => {

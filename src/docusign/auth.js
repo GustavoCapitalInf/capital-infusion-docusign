@@ -10,6 +10,18 @@ function safeDescription(value, fallback) {
   return String(value || fallback).replace(/[\r\n\t]+/g, ' ').slice(0, 300);
 }
 
+function accountInformationUrl(baseUri, accountId) {
+  const url = new URL(baseUri);
+  if (url.protocol !== 'https:' || !url.hostname.endsWith('.docusign.net')) {
+    throw new DocusignAuthError('invalid_base_uri', 'DocuSign userinfo returned an invalid base URI', {
+      phase: 'userinfo',
+      privateKeyLoaded: true,
+      privateKeyParsed: true,
+    });
+  }
+  return `${url.origin}/restapi/v2.1/accounts/${encodeURIComponent(accountId)}`;
+}
+
 export class DocusignAuthError extends Error {
   constructor(code, message, details = {}) {
     super(safeDescription(message, code));
@@ -162,10 +174,41 @@ export class DocusignJwtAuth {
         privateKeyParsed: true,
       });
     }
+
+    let apiResponse;
+    try {
+      apiResponse = await this.fetch(accountInformationUrl(account.base_uri, account.account_id), {
+        headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json' },
+      });
+    } catch (error) {
+      if (error instanceof DocusignAuthError) throw error;
+      throw new DocusignAuthError('esign_api_unreachable', 'Unable to reach the DocuSign eSignature API', {
+        phase: 'esign-api',
+        privateKeyLoaded: true,
+        privateKeyParsed: true,
+        userInfoSucceeded: true,
+      });
+    }
+    if (!apiResponse.ok) {
+      throw new DocusignAuthError(
+        'esign_api_failed',
+        `DocuSign account information request failed with HTTP ${apiResponse.status}`,
+        {
+          phase: 'esign-api',
+          apiStatus: apiResponse.status,
+          privateKeyLoaded: true,
+          privateKeyParsed: true,
+          userInfoSucceeded: true,
+        },
+      );
+    }
+
     return {
       accountId: account.account_id,
       accountName: account.account_name,
       baseUri: account.base_uri,
+      apiStatus: apiResponse.status,
+      apiReadSucceeded: true,
       privateKeyLoaded: true,
       privateKeyParsed: true,
     };
