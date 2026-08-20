@@ -63,6 +63,23 @@ export function createApp({ config, storage, processor, auth, logger }) {
     if (request.method === 'GET' && url.pathname === '/api/docusign/hmac-diagnostics') {
       return json(response, 200, latestHmacDiagnostics || { available: false });
     }
+    if (request.method === 'POST' && url.pathname === '/api/storage/test-r2') {
+      if (storage.provider !== 'r2') {
+        return json(response, 400, { success: false, provider: storage.provider, error: 'R2 configuration missing' });
+      }
+      try {
+        return json(response, 200, await storage.testConnectivity());
+      } catch (error) {
+        logger.error('R2 connectivity test failed', { error: error.code || 'r2_connectivity_failure' });
+        return json(response, 502, {
+          success: false,
+          provider: 'r2',
+          bucket: storage.bucket,
+          error: error.code || 'r2_connectivity_failure',
+          message: error.message,
+        });
+      }
+    }
     if (request.method !== 'POST' || url.pathname !== '/api/webhooks/docusign') return json(response, 404, { error: 'Not found' });
 
     try {

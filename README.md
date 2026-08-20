@@ -100,6 +100,11 @@ DOCUSIGN_CONNECT_HMAC_SECRET=<connect-hmac-secret>
 DOCUSIGN_REQUIRE_HMAC=true
 DOCUSIGN_STORAGE_DIR=./data/docusign
 DOCUSIGN_MAX_WEBHOOK_BYTES=1048576
+R2_ACCOUNT_ID=<cloudflare-account-id>
+R2_ENDPOINT=https://<cloudflare-account-id>.r2.cloudflarestorage.com
+R2_BUCKET_NAME=capital-infusion-docusign
+R2_ACCESS_KEY_ID=<r2-access-key-id>
+R2_SECRET_ACCESS_KEY=<r2-secret-access-key>
 ```
 
 Do not set `PORT` manually unless the Render service requires an override; Render
@@ -114,12 +119,48 @@ its `BEGIN` and `END` lines, as the file contents. Render exposes it at runtime 
 
 ### Storage warning
 
-`DOCUSIGN_STORAGE_DIR=./data/docusign` is suitable only for this milestone and local
-testing. Render's filesystem is ephemeral by default, so documents, event records,
-and idempotency state stored there can disappear after a deploy, restart, or free
-service spin-down. This is **not permanent production storage**. A future milestone
-should move documents and idempotency records to durable object/database storage;
-alternatively, a paid Render persistent disk can preserve a configured mount path.
+When all five `R2_*` variables are absent, the application uses
+`DOCUSIGN_STORAGE_DIR=./data/docusign` for local development. Render's filesystem is
+ephemeral, so local files can disappear after a deploy, restart, or free service
+spin-down.
+
+When any `R2_*` variable is present, all five are required and the application uses
+Cloudflare R2. It will not silently fall back to ephemeral storage if R2 is only
+partially configured. Startup logs the selected provider and bucket name but never
+credentials.
+
+The R2 bucket must remain private. Do not enable public access, an `r2.dev` URL,
+public ACLs, or browser/frontend access. All access uses the server-side S3-compatible
+client with region `auto`. Objects use this structure:
+
+```text
+docusign/
+  envelopes/
+    {envelopeId}/
+      documents/
+        {documentId}-{safeFilename}.pdf
+        certificate-Summary.pdf
+      metadata.json
+  events/
+    {eventHash}.json
+    {eventHash}.json.lock
+```
+
+Event locks are created with conditional `If-None-Match: *` writes. This prevents
+concurrent duplicate processing, while deterministic object keys make a retry safe
+if an earlier upload only partially completed. Stale locks can be reclaimed after
+15 minutes with an ETag-conditioned write.
+
+To test R2 safely after deployment, run:
+
+```bash
+curl -X POST https://capital-infusion-docusign.onrender.com/api/storage/test-r2
+```
+
+The check uploads a tiny uniquely named object under `healthchecks/`, verifies it
+with `HEAD`, and deletes it. It returns only booleans, provider, bucket, and a safe
+error code. This temporary endpoint should be removed after production setup has
+been verified.
 
 Startup reports only the names of missing DocuSign variables. It does not print
 their values, and `/health` remains available while DocuSign processing is being

@@ -111,3 +111,39 @@ test('returns safe structured auth failures', async () => {
     userInfoSucceeded: false,
   });
 });
+
+test('runs a safe R2 connectivity test through the storage provider', async () => {
+  const dependencies = fixture();
+  dependencies.storage.provider = 'r2';
+  dependencies.storage.bucket = 'private-bucket';
+  dependencies.storage.testConnectivity = async () => ({
+    success: true,
+    provider: 'r2',
+    bucket: 'private-bucket',
+    upload: true,
+    read: true,
+    delete: true,
+  });
+  const response = await invoke(dependencies, { method: 'POST', url: '/api/storage/test-r2' });
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body, {
+    success: true,
+    provider: 'r2',
+    bucket: 'private-bucket',
+    upload: true,
+    read: true,
+    delete: true,
+  });
+});
+
+test('reports missing R2 configuration without exposing configuration', async () => {
+  const dependencies = fixture();
+  dependencies.storage.provider = 'filesystem';
+  const response = await invoke(dependencies, { method: 'POST', url: '/api/storage/test-r2' });
+  assert.equal(response.status, 400);
+  assert.deepEqual(response.body, {
+    success: false,
+    provider: 'filesystem',
+    error: 'R2 configuration missing',
+  });
+});

@@ -3,7 +3,7 @@ import { loadConfig, missingApiConfiguration } from './config.js';
 import { createLogger } from './logger.js';
 import { DocusignJwtAuth } from './docusign/auth.js';
 import { DocusignClient } from './docusign/client.js';
-import { FileStorage } from './docusign/storage.js';
+import { createStorageProvider } from './docusign/storage-provider.js';
 import { CompletedEnvelopeProcessor } from './docusign/processor.js';
 import { createApp } from './app.js';
 
@@ -11,7 +11,7 @@ const config = loadConfig();
 const logger = createLogger(config.logLevel);
 const auth = new DocusignJwtAuth(config.docusign);
 const client = new DocusignClient(config.docusign, auth);
-const storage = new FileStorage(config.docusign.storageDir);
+const storage = createStorageProvider(config);
 const processor = new CompletedEnvelopeProcessor({
   client,
   storage,
@@ -19,6 +19,11 @@ const processor = new CompletedEnvelopeProcessor({
   logger,
 });
 const server = createServer(createApp({ config, storage, processor, auth, logger }));
+
+logger.info('Storage provider selected', {
+  provider: storage.provider === 'r2' ? 'Cloudflare R2' : 'local filesystem',
+  bucket: storage.provider === 'r2' ? storage.bucket : undefined,
+});
 
 const missing = missingApiConfiguration(config.docusign);
 if (config.docusign.requireHmac && !config.docusign.hmacSecret) {

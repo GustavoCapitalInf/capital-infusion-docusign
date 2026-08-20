@@ -49,6 +49,7 @@ export class CompletedEnvelopeProcessor {
         status: envelope.status,
         senderEmail: sender || undefined,
         completedDateTime: envelope.completedDateTime,
+        eventTimestamp: event.timestamp,
       });
       await this.storage.updateEvent(eventFile, {
         status: 'processed',

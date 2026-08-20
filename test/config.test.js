@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assertApiConfiguration, loadConfig, missingApiConfiguration } from '../src/config.js';
+import {
+  assertApiConfiguration,
+  assertR2Configuration,
+  loadConfig,
+  missingApiConfiguration,
+} from '../src/config.js';
 
 test('uses local port defaults and trims Render environment values', () => {
   const config = loadConfig({
@@ -12,6 +17,14 @@ test('uses local port defaults and trims Render environment values', () => {
   assert.equal(config.docusign.integrationKey, 'key-with-space');
   assert.equal(config.docusign.accountId, 'account-with-space');
   assert.equal(config.docusign.authServer, 'account-d.docusign.com');
+});
+
+test('reports missing R2 configuration without exposing configured values', () => {
+  const config = loadConfig({ R2_BUCKET_NAME: 'private-bucket' });
+  assert.throws(
+    () => assertR2Configuration(config.r2),
+    /Missing required R2 environment variables: R2_ACCOUNT_ID, R2_ENDPOINT, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY/,
+  );
 });
 
 test('uses Render PORT when provided', () => {

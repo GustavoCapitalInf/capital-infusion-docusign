@@ -43,7 +43,36 @@ export function loadConfig(environment = process.env) {
         'DOCUSIGN_MAX_WEBHOOK_BYTES',
       ),
     },
+    r2: {
+      accountId: string(environment.R2_ACCOUNT_ID),
+      endpoint: string(environment.R2_ENDPOINT).replace(/\/$/, ''),
+      bucket: string(environment.R2_BUCKET_NAME),
+      accessKeyId: string(environment.R2_ACCESS_KEY_ID),
+      secretAccessKey: string(environment.R2_SECRET_ACCESS_KEY),
+    },
   };
+}
+
+export function missingR2Configuration(config) {
+  const required = [
+    ['R2_ACCOUNT_ID', config.accountId],
+    ['R2_ENDPOINT', config.endpoint],
+    ['R2_BUCKET_NAME', config.bucket],
+    ['R2_ACCESS_KEY_ID', config.accessKeyId],
+    ['R2_SECRET_ACCESS_KEY', config.secretAccessKey],
+  ];
+  return required.filter(([, value]) => !value).map(([name]) => name);
+}
+
+export function hasR2Configuration(config) {
+  return Object.values(config).some(Boolean);
+}
+
+export function assertR2Configuration(config) {
+  const missing = missingR2Configuration(config);
+  if (missing.length) {
+    throw new Error(`Missing required R2 environment variable${missing.length === 1 ? '' : 's'}: ${missing.join(', ')}`);
+  }
 }
 
 export function missingApiConfiguration(config) {

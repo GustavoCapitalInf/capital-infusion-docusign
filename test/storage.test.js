@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { FileStorage, classifyDocument } from '../src/docusign/storage.js';
+import { documentFilename, FileStorage, classifyDocument } from '../src/docusign/storage.js';
 
 test('claims an event once and persists documents with safe, distinct metadata', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'docusign-storage-'));
@@ -26,8 +26,26 @@ test('claims an event once and persists documents with safe, distinct metadata',
   assert.equal(metadata.documents[1].category, 'certificate');
 });
 
+test('reclaims an interrupted local processing event after lock release', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'docusign-storage-retry-'));
+  const storage = new FileStorage(root);
+  const event = { provider: 'docusign', event: 'envelope-completed', envelopeId: 'env-retry' };
+  const interrupted = await storage.claim(event);
+  await storage.releaseClaim(interrupted.lock);
+  const retry = await storage.claim(event);
+  assert.equal(retry.claimed, true);
+  const record = JSON.parse(await readFile(retry.file));
+  assert.equal(record.retryCount, 1);
+  await storage.releaseClaim(retry.lock);
+});
+
 test('classifies application, certificate, and supplemental files', () => {
   assert.equal(classifyDocument({ type: 'content', name: 'Agreement.pdf' }), 'application');
   assert.equal(classifyDocument({ type: 'summary', name: 'Summary.pdf' }), 'certificate');
   assert.equal(classifyDocument({ type: 'attachment', name: 'Attachment.pdf' }), 'supplemental');
+});
+
+test('generates safe, deterministic document filenames', () => {
+  assert.equal(documentFilename({ documentId: '1', name: '../../Offer Letter.pdf' }), '1-Offer_Letter.pdf');
+  assert.equal(documentFilename({ documentId: 'certificate', name: 'Summary' }), 'certificate-Summary.pdf');
 });

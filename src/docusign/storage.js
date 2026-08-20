@@ -2,13 +2,25 @@ import { createHash } from 'node:crypto';
 import { mkdir, open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-function safeSegment(value, fallback = 'document') {
+export function safeSegment(value, fallback = 'document') {
   const normalized = String(value || fallback)
     .normalize('NFKD')
     .replace(/[^a-zA-Z0-9._-]+/g, '_')
     .replace(/^\.+/, '')
     .slice(0, 180);
   return normalized || fallback;
+}
+
+export function documentFilename(document) {
+  const originalName = document.name || `document-${document.documentId}.pdf`;
+  const rawExtension = path.extname(originalName);
+  const extension = rawExtension ? `.${safeSegment(rawExtension.slice(1), 'pdf')}` : '.pdf';
+  const base = safeSegment(path.basename(originalName, path.extname(originalName)));
+  return `${safeSegment(document.documentId, 'unknown')}-${base}${extension}`;
+}
+
+export function metadataClassification(category) {
+  return category === 'application' ? 'signed_document' : category;
 }
 
 async function atomicJson(file, value) {
@@ -20,6 +32,7 @@ async function atomicJson(file, value) {
 export class FileStorage {
   constructor(root) {
     this.root = root;
+    this.provider = 'filesystem';
   }
 
   eventPath(event) {
@@ -63,7 +76,7 @@ export class FileStorage {
         throw error;
       }
       const existing = JSON.parse(await readFile(file, 'utf8'));
-      if (existing.status !== 'failed') {
+      if (!['failed', 'processing'].includes(existing.status)) {
         await this.releaseClaim(lock);
         return { claimed: false, file, existing };
       }
@@ -93,10 +106,7 @@ export class FileStorage {
 
     for (const document of documents) {
       const originalName = document.name || `document-${document.documentId}.pdf`;
-      const rawExtension = path.extname(originalName);
-      const extension = rawExtension ? `.${safeSegment(rawExtension.slice(1), 'pdf')}` : '.pdf';
-      const base = safeSegment(path.basename(originalName, path.extname(originalName)));
-      const filename = `${safeSegment(document.documentId, 'unknown')}-${base}${extension}`;
+      const filename = documentFilename(document);
       const target = path.join(documentsDirectory, filename);
       await writeFile(target, document.contents, { mode: 0o600 });
       saved.push({
@@ -105,6 +115,7 @@ export class FileStorage {
         storedName: filename,
         type: document.type || 'content',
         category: document.category,
+        classification: metadataClassification(document.category),
         bytes: document.contents.length,
       });
     }
