@@ -326,6 +326,37 @@ This sends one clearly labeled example reminder through the configured provider.
 It logs only the provider name, safe result status, and safe error code. It never
 prints the trigger URL or payload credentials.
 
+### Contract reminder simulation
+
+Use an existing rep's active contract to test a reminder threshold immediately:
+
+```text
+npm run contract-reminder-test -- --rep sarahfondeur5@gmail.com --days 30
+npm run contract-reminder-test -- --rep sarahfondeur5@gmail.com --days 15
+npm run contract-reminder-test -- --rep sarahfondeur5@gmail.com --days 7
+npm run contract-reminder-test -- --rep sarahfondeur5@gmail.com --days 0
+```
+
+Only `30`, `15`, `7`, and `0` are accepted. The simulation reads the real active
+contract and evaluates it at a temporary UTC date calculated from its existing
+`expiresAt`. It never writes the lifecycle, contract history, rep index, envelope
+metadata, tier, signing date, or expiration date.
+
+Test claims use `test:{envelopeId}:{threshold}:{uniqueRunId}`. They therefore use
+the same persistent conditional claim mechanism as production without consuming
+the production `{envelopeId}:{threshold}` identity. To demonstrate duplicate
+protection with one test ID, run:
+
+```text
+npm run contract-reminder-test -- --rep sarahfondeur5@gmail.com --days 30 --idempotency-test
+```
+
+The first attempt sends and the second reports `skipped_duplicate`. Test-mode Power
+Automate payloads include `isTest: true` plus explicit `subject` and `body` fields.
+Configure the Outlook action to use those two fields when `isTest` is true; normal
+production payloads retain their original seven-field shape. The subject begins
+with `[TEST]`, and the body states that the real expiration date was not modified.
+
 Tier 1 and Tier 2 contracts use 30/15/7/0-day thresholds. If a run is missed, only
 the nearest crossed threshold is eligible: 14 days remaining selects the 15-day
 reminder and never the older 30-day reminder. Each send first conditionally creates

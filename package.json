@@ -9,6 +9,7 @@
     "dev": "node --watch src/server.js",
     "contract-reminders": "node src/contract-reminders.js",
     "contract-email-test": "node src/contract-email-smoke.js",
+    "contract-reminder-test": "node src/contract-reminder-simulate.js",
     "test": "node --test"
   },
   "engines": {

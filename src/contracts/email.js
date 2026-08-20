@@ -7,9 +7,25 @@ function formatExpiration(timestamp) {
   }).format(new Date(timestamp));
 }
 
-function reminderCopy({ rep, currentTier, nextTier, expiresAt, daysRemaining }) {
+function reminderCopy({ rep, currentTier, nextTier, expiresAt, daysRemaining, isTest = false }) {
   const timing = daysRemaining === 0 ? 'today' : `in ${daysRemaining} days`;
   const expiration = formatExpiration(expiresAt);
+  if (isTest) {
+    return {
+      subject: `[TEST] ${rep.name} contract expires ${timing}`,
+      text: [
+        'This is a contract reminder test.',
+        '',
+        `${rep.name}'s contract expires ${timing}.`,
+        '',
+        `Current Tier: Tier ${currentTier}`,
+        `Next Tier: ${nextTier ? `Tier ${nextTier}` : 'None'}`,
+        `Rep Email: ${rep.email}`,
+        '',
+        'This test did not modify the real contract expiration date.',
+      ].join('\n'),
+    };
+  }
   return {
     subject: `${rep.name} contract expires ${timing}`,
     text: [
@@ -71,18 +87,25 @@ export class PowerAutomateContractEmailProvider {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
+      const copy = input.isTest ? reminderCopy(input) : undefined;
+      const payload = {
+        repName: input.rep.name,
+        repEmail: input.rep.email,
+        daysRemaining: input.daysRemaining,
+        expirationDate: expirationDate(input.expiresAt),
+        currentTier: input.currentTier,
+        nextTier: input.nextTier ?? null,
+        notificationId: input.notificationId,
+      };
+      if (input.isTest) {
+        payload.isTest = true;
+        payload.subject = copy.subject;
+        payload.body = copy.text;
+      }
       const response = await this.fetch(this.url, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          repName: input.rep.name,
-          repEmail: input.rep.email,
-          daysRemaining: input.daysRemaining,
-          expirationDate: expirationDate(input.expiresAt),
-          currentTier: input.currentTier,
-          nextTier: input.nextTier ?? null,
-          notificationId: input.notificationId,
-        }),
+        body: JSON.stringify(payload),
         signal: controller.signal,
       });
 
