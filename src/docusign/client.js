@@ -45,6 +45,14 @@ export class DocusignClient {
     return result.envelopeDocuments || [];
   }
 
+  async listRecipients(envelopeId) {
+    return (await this.request(
+      `/envelopes/${encodeURIComponent(envelopeId)}/recipients`,
+      'Recipient list',
+      'recipient-list',
+    )).json();
+  }
+
   async downloadDocument(envelopeId, documentId) {
     return Buffer.from(await (await this.request(
       `/envelopes/${encodeURIComponent(envelopeId)}/documents/${encodeURIComponent(documentId)}`,

@@ -10,6 +10,7 @@ import { documentFilename, metadataClassification, safeSegment } from './storage
 import { normalizeEnvelopeMetadata, publicEnvelope, repSummary, upsertEnvelope } from './catalog.js';
 
 const LOCK_MAX_AGE_MS = 15 * 60 * 1000;
+const CATALOG_SCHEMA_VERSION = 2;
 
 function isNotFound(error) {
   return ['NoSuchKey', 'NotFound'].includes(error?.name) || error?.$metadata?.httpStatusCode === 404;
@@ -51,6 +52,7 @@ export class R2Storage {
     this.prefix = prefix.replace(/^\/+|\/+$/g, '');
     this.now = now;
     this.provider = 'r2';
+    this.catalogQueue = Promise.resolve();
   }
 
   eventKey(event) {
@@ -104,14 +106,21 @@ export class R2Storage {
   }
 
   async indexEnvelope(metadata) {
+    const operation = this.catalogQueue.then(() => this.indexEnvelopeUnlocked(metadata));
+    this.catalogQueue = operation.catch(() => {});
+    return operation;
+  }
+
+  async indexEnvelopeUnlocked(metadata) {
     const envelope = publicEnvelope(normalizeEnvelopeMetadata(metadata));
     const repIndex = await this.updateJsonIndex(
       this.repKey(envelope.rep.repId),
-      { repId: envelope.rep.repId, repEmail: envelope.rep.email, repName: envelope.rep.name, repType: envelope.rep.type, envelopes: [] },
+      { schemaVersion: CATALOG_SCHEMA_VERSION, repId: envelope.rep.repId, repEmail: envelope.rep.email, repName: envelope.rep.name, repType: envelope.rep.type, envelopes: [] },
       (index) => ({
         ...index,
+        schemaVersion: CATALOG_SCHEMA_VERSION,
         repId: envelope.rep.repId,
-        repEmail: envelope.rep.type === 'internal' ? envelope.rep.email : undefined,
+        repEmail: envelope.rep.type === 'signer' ? envelope.rep.email : undefined,
         repName: envelope.rep.name,
         repType: envelope.rep.type,
         envelopes: upsertEnvelope(index.envelopes || [], envelope),
@@ -119,14 +128,15 @@ export class R2Storage {
     );
     await this.updateJsonIndex(
       `${this.prefix}/envelopes/index.json`,
-      { envelopes: [] },
-      (index) => ({ envelopes: upsertEnvelope(index.envelopes || [], envelope) }),
+      { schemaVersion: CATALOG_SCHEMA_VERSION, envelopes: [] },
+      (index) => ({ schemaVersion: CATALOG_SCHEMA_VERSION, envelopes: upsertEnvelope(index.envelopes || [], envelope) }),
     );
     const summary = repSummary(envelope.rep, repIndex.envelopes);
     await this.updateJsonIndex(
       `${this.prefix}/reps/index.json`,
-      { reps: [] },
+      { schemaVersion: CATALOG_SCHEMA_VERSION, reps: [] },
       (index) => ({
+        schemaVersion: CATALOG_SCHEMA_VERSION,
         reps: [...(index.reps || []).filter((rep) => rep.repId !== summary.repId), summary]
           .sort((a, b) => String(b.latestCompletedAt || '').localeCompare(String(a.latestCompletedAt || ''))),
       }),
@@ -241,10 +251,13 @@ export class R2Storage {
       provider: 'docusign',
       envelopeId,
       status: envelopeMetadata.status,
+      sender: envelopeMetadata.sender,
       senderEmail: envelopeMetadata.senderEmail,
       eventTimestamp: envelopeMetadata.eventTimestamp,
       completedAt: envelopeMetadata.completedDateTime || envelopeMetadata.eventTimestamp,
       rep: envelopeMetadata.rep,
+      repSource: envelopeMetadata.repSource,
+      recipientResolution: envelopeMetadata.recipientResolution,
       retrievedAt: this.now().toISOString(),
       documents: saved,
     };
@@ -261,7 +274,8 @@ export class R2Storage {
     return saved;
   }
 
-  async rebuildIndexes() {
+  async listEnvelopeMetadataRecords() {
+    const records = [];
     let continuationToken;
     do {
       const result = await this.client.send(new ListObjectsV2Command({
@@ -273,28 +287,91 @@ export class R2Storage {
       for (const entry of result.CommonPrefixes || []) {
         if (!entry.Prefix || entry.Prefix === `${this.prefix}/envelopes/`) continue;
         try {
-          await this.indexEnvelope(await this.getJson(`${entry.Prefix}metadata.json`));
+          records.push(await this.getJson(`${entry.Prefix}metadata.json`));
         } catch (error) {
           if (!isNotFound(error) && !(error instanceof SyntaxError) && !String(error.message).includes('Corrupted envelope metadata')) throw error;
         }
       }
       continuationToken = result.IsTruncated ? result.NextContinuationToken : undefined;
     } while (continuationToken);
-    await this.updateJsonIndex(
-      `${this.prefix}/envelopes/index.json`,
-      { envelopes: [] },
-      (index) => ({ envelopes: index.envelopes || [] }),
-    );
-    await this.updateJsonIndex(
-      `${this.prefix}/reps/index.json`,
-      { reps: [] },
-      (index) => ({ reps: index.reps || [] }),
-    );
+    return records;
+  }
+
+  async updateEnvelopeIdentity(envelopeId, identity) {
+    const key = `${this.prefix}/envelopes/${safeSegment(envelopeId, 'envelope')}/metadata.json`;
+    await this.updateJsonIndex(key, undefined, (existing) => {
+      if (!existing) throw new Error('Envelope not found');
+      return {
+        ...existing,
+        sender: identity.sender,
+        senderEmail: identity.sender?.email,
+        rep: identity.rep,
+        repSource: 'completed_signer',
+        recipientResolution: identity.recipientResolution,
+      };
+    });
+  }
+
+  async rebuildIndexes() {
+    const operation = this.catalogQueue.then(async () => {
+      const previous = await this.getJsonRecord(`${this.prefix}/reps/index.json`);
+      const previousRepIds = new Set((previous.value?.reps || []).map((rep) => rep.repId));
+      const envelopes = [];
+      const groups = new Map();
+      for (const metadata of await this.listEnvelopeMetadataRecords()) {
+        let envelope;
+        try {
+          envelope = publicEnvelope(normalizeEnvelopeMetadata(metadata));
+        } catch (error) {
+          if (error.message === 'Corrupted envelope metadata') continue;
+          throw error;
+        }
+        envelopes.push(envelope);
+        const group = groups.get(envelope.rep.repId) || { rep: envelope.rep, envelopes: [] };
+        group.rep = envelope.rep;
+        group.envelopes = upsertEnvelope(group.envelopes, envelope);
+        groups.set(envelope.rep.repId, group);
+      }
+
+      for (const [repId, group] of groups) {
+        await this.updateJsonIndex(this.repKey(repId), {}, () => ({
+          schemaVersion: CATALOG_SCHEMA_VERSION,
+          repId,
+          repEmail: group.rep.type === 'signer' ? group.rep.email : undefined,
+          repName: group.rep.name,
+          repType: group.rep.type,
+          envelopes: group.envelopes,
+        }));
+        previousRepIds.delete(repId);
+      }
+      for (const staleRepId of previousRepIds) {
+        await this.updateJsonIndex(this.repKey(staleRepId), {}, () => ({
+          schemaVersion: CATALOG_SCHEMA_VERSION,
+          repId: staleRepId,
+          envelopes: [],
+        }));
+      }
+      const sortedEnvelopes = [...envelopes]
+        .sort((a, b) => String(b.completedAt || '').localeCompare(String(a.completedAt || '')));
+      await this.updateJsonIndex(`${this.prefix}/envelopes/index.json`, {}, () => ({
+        schemaVersion: CATALOG_SCHEMA_VERSION,
+        envelopes: sortedEnvelopes,
+      }));
+      const reps = [...groups.values()]
+        .map((group) => repSummary(group.rep, group.envelopes))
+        .sort((a, b) => String(b.latestCompletedAt || '').localeCompare(String(a.latestCompletedAt || '')));
+      await this.updateJsonIndex(`${this.prefix}/reps/index.json`, {}, () => ({
+        schemaVersion: CATALOG_SCHEMA_VERSION,
+        reps,
+      }));
+    });
+    this.catalogQueue = operation.catch(() => {});
+    return operation;
   }
 
   async ensureIndexes() {
     const global = await this.getJsonRecord(`${this.prefix}/envelopes/index.json`);
-    if (global.exists) return;
+    if (global.exists && global.value?.schemaVersion === CATALOG_SCHEMA_VERSION) return;
     if (!this.rebuildPromise) this.rebuildPromise = this.rebuildIndexes().finally(() => { this.rebuildPromise = undefined; });
     await this.rebuildPromise;
   }
@@ -302,13 +379,24 @@ export class R2Storage {
   async listReps() {
     await this.ensureIndexes();
     const record = await this.getJsonRecord(`${this.prefix}/reps/index.json`);
-    return record.value?.reps || [];
+    const reps = [];
+    for (const entry of record.value?.reps || []) {
+      const repIndex = await this.getJsonRecord(this.repKey(entry.repId));
+      if (!repIndex.value?.envelopes?.length) continue;
+      reps.push(repSummary({
+        repId: repIndex.value.repId,
+        type: repIndex.value.repType,
+        email: repIndex.value.repEmail,
+        name: repIndex.value.repName,
+      }, repIndex.value.envelopes));
+    }
+    return reps.sort((a, b) => String(b.latestCompletedAt || '').localeCompare(String(a.latestCompletedAt || '')));
   }
 
   async listRepEnvelopes(repId) {
     await this.ensureIndexes();
     const record = await this.getJsonRecord(this.repKey(repId));
-    if (!record.exists) return undefined;
+    if (!record.exists || !record.value?.envelopes?.length) return undefined;
     return {
       rep: {
         repId: record.value.repId,

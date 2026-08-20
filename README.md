@@ -100,7 +100,6 @@ DOCUSIGN_CONNECT_HMAC_SECRET=<connect-hmac-secret>
 DOCUSIGN_REQUIRE_HMAC=true
 DOCUSIGN_STORAGE_DIR=./data/docusign
 DOCUSIGN_MAX_WEBHOOK_BYTES=1048576
-DOCUSIGN_REP_EMAIL_DOMAIN=capital-infusion.com
 R2_ACCOUNT_ID=<cloudflare-account-id>
 R2_ENDPOINT=https://<cloudflare-account-id>.r2.cloudflarestorage.com
 R2_BUCKET_NAME=capital-infusion-docusign
@@ -165,12 +164,18 @@ been verified.
 
 ## Rep-centric document catalog
 
-Completed envelopes are grouped by their authoritative DocuSign sender. Sender
-email is normalized to lowercase and validated against
-`DOCUSIGN_REP_EMAIL_DOMAIN`. DocuSign's sender display name is preferred; otherwise
-the application converts an address such as `john.smith@capital-infusion.com` to
-`John Smith`. External or missing senders are retained in the `unassigned` group
-and are never inferred from recipient details.
+Completed envelopes are grouped by the authoritative completed DocuSign signer,
+not by the sender. `DOCUSIGN_ALLOWED_SENDERS` remains an independent ingestion
+control: for example, HR may be the allowed sender while `gustavoprietop@gmail.com`
+is the signer and therefore the rep. Signer email is normalized to lowercase and
+is the stable rep ID. DocuSign's signer name is preferred; otherwise a readable
+name is derived from the email username.
+
+The resolver considers only DocuSign `signers` whose status is `completed` or that
+have a signing timestamp. Carbon-copy recipients are excluded. Repeated signer
+records with the same normalized email are deduplicated. Exactly one unique
+completed signer resolves the rep; zero becomes `unassigned`, and multiple distinct
+completed signers become `requires-resolution` instead of being guessed.
 
 R2 keeps the canonical envelope layout unchanged and adds logical JSON indexes:
 
@@ -184,6 +189,13 @@ Index updates use ETag conditions and replace entries by envelope ID, so duplica
 webhooks cannot append duplicate rep-envelope relationships. If indexes do not yet
 exist, the first catalog request backfills them by listing envelope prefixes and
 reading only `metadata.json`—document bodies are not scanned or downloaded.
+
+At startup, legacy sender-based metadata is detected by its missing
+`repSource: completed_signer` marker. The migration requests only recipient metadata
+from DocuSign, rewrites the envelope's sender and signer identity fields, and then
+rebuilds schema-versioned indexes from `metadata.json`. It never downloads document
+bodies. Stale sender groups are emptied, and unique envelope IDs prevent count
+inflation.
 
 Catalog APIs:
 

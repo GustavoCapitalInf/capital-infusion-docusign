@@ -2,38 +2,56 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   displayNameFromEmail,
-  isInternalRepEmail,
   normalizeEmail,
-  resolveRepFromSender,
+  resolveRepFromRecipients,
 } from '../src/docusign/rep.js';
 
-test('normalizes and validates internal rep emails centrally', () => {
-  assert.equal(normalizeEmail(' John.Smith@Capital-Infusion.com '), 'john.smith@capital-infusion.com');
-  assert.equal(isInternalRepEmail('john@capital-infusion.com'), true);
-  assert.equal(isInternalRepEmail('customer@gmail.com'), false);
-  assert.equal(isInternalRepEmail('not-an-email'), false);
+test('normalizes signer email and derives a fallback display name', () => {
+  assert.equal(normalizeEmail(' GustavoPrietoP@GMAIL.com '), 'gustavoprietop@gmail.com');
+  assert.equal(normalizeEmail('not-an-email'), '');
+  assert.equal(displayNameFromEmail('mary_jane@example.com'), 'Mary Jane');
 });
 
-test('prefers sender display name and falls back to the email username', () => {
-  assert.deepEqual(resolveRepFromSender({
-    email: 'JOHN.SMITH@capital-infusion.com',
-    userName: 'Jonathan Smith',
-  }), {
-    repId: 'john.smith@capital-infusion.com',
-    type: 'internal',
-    email: 'john.smith@capital-infusion.com',
-    name: 'Jonathan Smith',
+test('resolves one completed signer as rep and never selects a CC', () => {
+  const result = resolveRepFromRecipients({
+    signers: [{ email: ' GustavoPrietoP@GMAIL.com ', name: 'Gustavo Prieto', status: 'completed' }],
+    carbonCopies: [{ email: 'hr@capital-infusion.com', name: 'HR', status: 'completed' }],
   });
-  assert.equal(displayNameFromEmail('mary_jane@capital-infusion.com'), 'Mary Jane');
-  assert.equal(resolveRepFromSender({ email: 'mary_jane@capital-infusion.com' }).name, 'Mary Jane');
+  assert.deepEqual(result, {
+    rep: {
+      repId: 'gustavoprietop@gmail.com',
+      type: 'signer',
+      email: 'gustavoprietop@gmail.com',
+      name: 'Gustavo Prieto',
+    },
+    resolution: { status: 'resolved', completedSignerCount: 1 },
+  });
 });
 
-test('groups external or missing senders as unassigned instead of discarding them', () => {
-  assert.deepEqual(resolveRepFromSender({ email: 'customer@gmail.com', name: 'Customer' }), {
-    repId: 'unassigned',
-    type: 'unassigned',
-    email: 'customer@gmail.com',
-    name: 'Unknown Rep',
+test('deduplicates signer records by normalized email', () => {
+  const result = resolveRepFromRecipients({ signers: [
+    { email: 'rep@example.com', name: 'Rep', status: 'completed' },
+    { email: 'REP@example.com', name: 'Rep', signedDateTime: '2026-08-20' },
+  ] });
+  assert.equal(result.rep.repId, 'rep@example.com');
+  assert.equal(result.resolution.completedSignerCount, 1);
+});
+
+test('marks multiple distinct completed signers as requiring resolution', () => {
+  const result = resolveRepFromRecipients({ signers: [
+    { email: 'one@example.com', status: 'completed' },
+    { email: 'two@example.com', status: 'completed' },
+  ] });
+  assert.equal(result.rep.repId, 'requires-resolution');
+  assert.equal(result.rep.type, 'requires_resolution');
+  assert.deepEqual(result.resolution, { status: 'requires_resolution', completedSignerCount: 2 });
+});
+
+test('leaves envelopes without a completed signer unassigned', () => {
+  const result = resolveRepFromRecipients({
+    signers: [{ email: 'pending@example.com', status: 'delivered' }],
+    carbonCopies: [{ email: 'cc@example.com', status: 'completed' }],
   });
-  assert.equal(resolveRepFromSender({}).repId, 'unassigned');
+  assert.equal(result.rep.repId, 'unassigned');
+  assert.equal(result.resolution.completedSignerCount, 0);
 });

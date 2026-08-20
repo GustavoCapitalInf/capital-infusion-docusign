@@ -111,8 +111,11 @@ test('uploads signed documents, certificates, supplemental files, and safe metad
     { documentId: '2', name: 'Evidence.txt', type: 'attachment', category: 'supplemental', contents: Buffer.from('extra') },
   ], {
     status: 'completed',
-    senderEmail: 'john@capital-infusion.com',
-    rep: { repId: 'john@capital-infusion.com', type: 'internal', email: 'john@capital-infusion.com', name: 'John Smith' },
+    sender: { email: 'hr@capital-infusion.com' },
+    senderEmail: 'hr@capital-infusion.com',
+    rep: { repId: 'rep@example.com', type: 'signer', email: 'rep@example.com', name: 'Example Rep' },
+    repSource: 'completed_signer',
+    recipientResolution: { status: 'resolved', completedSignerCount: 1 },
     eventTimestamp: '2026-08-19T11:59:00Z',
   });
 
@@ -138,11 +141,14 @@ test('uploads signed documents, certificates, supplemental files, and safe metad
     { documentId: '1', name: '../../Offer Letter.pdf', type: 'content', category: 'application', contents: Buffer.from('signed') },
   ], {
     status: 'completed',
-    senderEmail: 'john@capital-infusion.com',
-    rep: { repId: 'john@capital-infusion.com', type: 'internal', email: 'john@capital-infusion.com', name: 'John Smith' },
+    sender: { email: 'hr@capital-infusion.com' },
+    senderEmail: 'hr@capital-infusion.com',
+    rep: { repId: 'rep@example.com', type: 'signer', email: 'rep@example.com', name: 'Example Rep' },
+    repSource: 'completed_signer',
+    recipientResolution: { status: 'resolved', completedSignerCount: 1 },
     eventTimestamp: '2026-08-19T11:59:00Z',
   });
-  const repIndex = JSON.parse(client.objects.get('docusign/reps/john%40capital-infusion.com/index.json').Body);
+  const repIndex = JSON.parse(client.objects.get('docusign/reps/rep%40example.com/index.json').Body);
   assert.equal(repIndex.envelopes.length, 1);
 });
 
@@ -154,13 +160,16 @@ test('lists reps, rep envelopes, global envelopes, details, and validated privat
     { documentId: 'certificate', name: 'Summary', type: 'summary', category: 'certificate', contents: Buffer.from('certificate') },
   ], {
     status: 'completed',
-    senderEmail: 'john@capital-infusion.com',
-    rep: { repId: 'john@capital-infusion.com', type: 'internal', email: 'john@capital-infusion.com', name: 'John Smith' },
+    sender: { email: 'hr@capital-infusion.com' },
+    senderEmail: 'hr@capital-infusion.com',
+    rep: { repId: 'john@example.com', type: 'signer', email: 'john@example.com', name: 'John Smith' },
+    repSource: 'completed_signer',
+    recipientResolution: { status: 'resolved', completedSignerCount: 1 },
     completedDateTime: '2026-08-20T00:09:02Z',
   });
   const reps = await storage.listReps();
   assert.equal(reps[0].completedEnvelopeCount, 1);
-  const group = await storage.listRepEnvelopes('john@capital-infusion.com');
+  const group = await storage.listRepEnvelopes('john@example.com');
   assert.equal(group.envelopes[0].primaryDocumentName, 'Application.pdf');
   assert.equal((await storage.listEnvelopes())[0].rep.name, 'John Smith');
   const envelope = await storage.getEnvelope('env-1');
@@ -171,6 +180,29 @@ test('lists reps, rep envelopes, global envelopes, details, and validated privat
   assert.equal(document.document.name, 'Application.pdf');
   assert.equal(await storage.getDocument('env-1', '../../secret'), undefined);
   assert.equal(await storage.getEnvelope('missing'), undefined);
+});
+
+test('keeps one signer rep while unique envelope count grows and duplicates do not inflate it', async () => {
+  const client = new MemoryS3Client();
+  const storage = new R2Storage({ client, bucket: 'private-bucket' });
+  const metadata = {
+    status: 'completed',
+    sender: { email: 'hr@capital-infusion.com' },
+    senderEmail: 'hr@capital-infusion.com',
+    rep: { repId: 'same.rep@example.com', type: 'signer', email: 'same.rep@example.com', name: 'Same Rep' },
+    repSource: 'completed_signer',
+    recipientResolution: { status: 'resolved', completedSignerCount: 1 },
+    completedDateTime: '2026-08-20',
+  };
+  await storage.saveEnvelope('env-1', [], metadata);
+  await storage.saveEnvelope('env-2', [], metadata);
+  await storage.saveEnvelope('env-2', [], metadata);
+  assert.equal((await storage.listReps())[0].completedEnvelopeCount, 2);
+  await storage.saveEnvelope('env-3', [], metadata);
+  const reps = await storage.listReps();
+  assert.equal(reps.length, 1);
+  assert.equal(reps[0].completedEnvelopeCount, 3);
+  assert.equal((await storage.listRepEnvelopes('same.rep@example.com')).envelopes.length, 3);
 });
 
 test('backfills rep indexes from existing envelope metadata without reading PDFs', async () => {
@@ -186,10 +218,44 @@ test('backfills rep indexes from existing envelope metadata without reading PDFs
     }),
   }));
   const reps = await storage.listReps();
-  assert.equal(reps[0].repId, 'legacy.rep@capital-infusion.com');
-  assert.equal(reps[0].name, 'Legacy Rep');
+  assert.equal(reps[0].repId, 'requires-resolution');
+  assert.equal(reps[0].name, 'Rep Resolution Required');
   const documentReads = client.commands.filter(({ name, input }) => name === 'GetObjectCommand' && input.Key.includes('/documents/'));
   assert.equal(documentReads.length, 0);
+});
+
+test('rebuild removes stale sender grouping after signer metadata migration', async () => {
+  const client = new MemoryS3Client();
+  const storage = new R2Storage({ client, bucket: 'private-bucket' });
+  await client.send(new PutObjectCommand({
+    Bucket: 'private-bucket',
+    Key: 'docusign/envelopes/legacy/metadata.json',
+    Body: JSON.stringify({
+      envelopeId: 'legacy',
+      senderEmail: 'hr@capital-infusion.com',
+      rep: { repId: 'hr@capital-infusion.com', type: 'internal', email: 'hr@capital-infusion.com', name: 'HR' },
+      documents: [],
+    }),
+  }));
+  await client.send(new PutObjectCommand({
+    Bucket: 'private-bucket',
+    Key: 'docusign/reps/index.json',
+    Body: JSON.stringify({ reps: [{ repId: 'hr@capital-infusion.com' }] }),
+  }));
+  await client.send(new PutObjectCommand({
+    Bucket: 'private-bucket',
+    Key: 'docusign/reps/hr%40capital-infusion.com/index.json',
+    Body: JSON.stringify({ repId: 'hr@capital-infusion.com', envelopes: [{ envelopeId: 'legacy' }] }),
+  }));
+  await storage.updateEnvelopeIdentity('legacy', {
+    sender: { email: 'hr@capital-infusion.com' },
+    rep: { repId: 'rep@gmail.com', type: 'signer', email: 'rep@gmail.com', name: 'Rep' },
+    recipientResolution: { status: 'resolved', completedSignerCount: 1 },
+  });
+  await storage.rebuildIndexes();
+  assert.deepEqual((await storage.listReps()).map((rep) => rep.repId), ['rep@gmail.com']);
+  assert.equal(await storage.listRepEnvelopes('hr@capital-infusion.com'), undefined);
+  assert.equal((await storage.listRepEnvelopes('rep@gmail.com')).envelopes.length, 1);
 });
 
 test('handles unassigned reps and corrupted metadata safely', async () => {
@@ -198,7 +264,9 @@ test('handles unassigned reps and corrupted metadata safely', async () => {
   await storage.saveEnvelope('external-env', [], {
     status: 'completed',
     senderEmail: 'external@gmail.com',
-    rep: { repId: 'unassigned', type: 'unassigned', email: 'external@gmail.com', name: 'Unknown Rep' },
+    rep: { repId: 'unassigned', type: 'unassigned', name: 'Unknown Rep' },
+    repSource: 'completed_signer',
+    recipientResolution: { status: 'unassigned', completedSignerCount: 0 },
     completedDateTime: '2026-08-20',
   });
   assert.equal((await storage.listReps())[0].repId, 'unassigned');

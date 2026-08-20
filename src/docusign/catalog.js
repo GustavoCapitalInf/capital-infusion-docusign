@@ -1,17 +1,18 @@
-import { resolveRepFromSender } from './rep.js';
+import { normalizeEmail } from './rep.js';
 
 function classification(category) {
   return category === 'application' ? 'signed_document' : category;
 }
 
-export function normalizeEnvelopeMetadata(metadata, repEmailDomain = 'capital-infusion.com') {
+export function normalizeEnvelopeMetadata(metadata) {
   if (!metadata || typeof metadata !== 'object' || !metadata.envelopeId) {
     throw new Error('Corrupted envelope metadata');
   }
-  const senderEmail = metadata.senderEmail || metadata.envelope?.senderEmail;
-  const rep = metadata.rep?.repId
+  const senderEmail = normalizeEmail(metadata.sender?.email || metadata.senderEmail || metadata.envelope?.senderEmail);
+  const signerResolved = metadata.repSource === 'completed_signer';
+  const rep = signerResolved && metadata.rep?.repId
     ? metadata.rep
-    : resolveRepFromSender({ email: senderEmail, name: metadata.senderName }, repEmailDomain);
+    : { repId: 'requires-resolution', type: 'requires_resolution', name: 'Rep Resolution Required' };
   const documents = Array.isArray(metadata.documents)
     ? metadata.documents.map((document) => ({
       documentId: String(document.documentId),
@@ -29,13 +30,23 @@ export function normalizeEnvelopeMetadata(metadata, repEmailDomain = 'capital-in
   return {
     envelopeId: String(metadata.envelopeId),
     status: metadata.status || metadata.envelope?.status || 'completed',
-    senderEmail,
+    sender: {
+      email: senderEmail || undefined,
+      name: metadata.sender?.name || metadata.envelope?.senderName,
+    },
+    senderEmail: senderEmail || undefined,
     rep: {
       repId: rep.repId,
-      type: rep.type || (rep.repId === 'unassigned' ? 'unassigned' : 'internal'),
+      type: rep.type || (rep.repId === 'unassigned' ? 'unassigned' : 'signer'),
       email: rep.email,
       name: rep.name || 'Unknown Rep',
     },
+    repSource: signerResolved ? 'completed_signer' : 'legacy_sender',
+    recipientResolution: metadata.recipientResolution || {
+      status: 'requires_resolution',
+      completedSignerCount: undefined,
+    },
+    needsRecipientMigration: !signerResolved,
     completedAt,
     primaryDocumentName: primary?.name,
     documentCount: documents.length,
@@ -47,6 +58,7 @@ export function publicEnvelope(envelope) {
   return {
     envelopeId: envelope.envelopeId,
     status: envelope.status,
+    sender: envelope.sender,
     senderEmail: envelope.senderEmail,
     rep: envelope.rep,
     completedAt: envelope.completedAt,
@@ -57,6 +69,7 @@ export function publicEnvelope(envelope) {
       name: document.name,
       classification: document.classification,
     })),
+    recipientResolution: envelope.recipientResolution,
   };
 }
 
@@ -66,7 +79,7 @@ export function repSummary(rep, envelopes) {
     repId: rep.repId,
     type: rep.type,
     name: rep.name,
-    email: rep.type === 'internal' ? rep.email : undefined,
+    email: rep.type === 'signer' ? rep.email : undefined,
     completedEnvelopeCount: sorted.length,
     latestCompletedAt: sorted[0]?.completedAt,
   };

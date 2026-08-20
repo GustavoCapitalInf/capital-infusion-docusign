@@ -126,8 +126,11 @@ export class FileStorage {
       provider: 'docusign',
       envelopeId,
       status: envelopeMetadata.status,
+      sender: envelopeMetadata.sender,
       senderEmail: envelopeMetadata.senderEmail,
       rep: envelopeMetadata.rep,
+      repSource: envelopeMetadata.repSource,
+      recipientResolution: envelopeMetadata.recipientResolution,
       completedAt: envelopeMetadata.completedDateTime || envelopeMetadata.eventTimestamp,
       eventTimestamp: envelopeMetadata.eventTimestamp,
       retrievedAt: new Date().toISOString(),
@@ -146,6 +149,44 @@ export class FileStorage {
       if (error instanceof SyntaxError) throw new Error('Corrupted envelope metadata');
       throw error;
     }
+  }
+
+  async listEnvelopeMetadataRecords() {
+    const root = path.join(this.root, 'envelopes');
+    let entries;
+    try {
+      entries = await readdir(root, { withFileTypes: true });
+    } catch (error) {
+      if (error.code === 'ENOENT') return [];
+      throw error;
+    }
+    const records = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      try {
+        records.push(JSON.parse(await readFile(path.join(root, entry.name, 'metadata.json'), 'utf8')));
+      } catch (error) {
+        if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
+      }
+    }
+    return records;
+  }
+
+  async updateEnvelopeIdentity(envelopeId, identity) {
+    const file = path.join(this.root, 'envelopes', safeSegment(envelopeId, 'envelope'), 'metadata.json');
+    const existing = JSON.parse(await readFile(file, 'utf8'));
+    await atomicJson(file, {
+      ...existing,
+      sender: identity.sender,
+      senderEmail: identity.sender?.email,
+      rep: identity.rep,
+      repSource: 'completed_signer',
+      recipientResolution: identity.recipientResolution,
+    });
+  }
+
+  async rebuildIndexes() {
+    // Filesystem catalog views are derived from metadata.json on each request.
   }
 
   async getEnvelope(envelopeId) {

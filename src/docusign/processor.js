@@ -1,5 +1,5 @@
 import { classifyDocument } from './storage.js';
-import { resolveRepFromSender } from './rep.js';
+import { normalizeEmail, resolveRepFromRecipients } from './rep.js';
 
 function senderEmail(envelope) {
   return envelope?.sender?.email || envelope?.sender?.emailAddress || envelope?.senderEmail;
@@ -13,11 +13,10 @@ function envelopeSender(envelope, webhookEmail) {
 }
 
 export class CompletedEnvelopeProcessor {
-  constructor({ client, storage, allowedSenders, repEmailDomain, logger }) {
+  constructor({ client, storage, allowedSenders, logger }) {
     this.client = client;
     this.storage = storage;
     this.allowedSenders = allowedSenders;
-    this.repEmailDomain = repEmailDomain;
     this.logger = logger;
   }
 
@@ -26,15 +25,22 @@ export class CompletedEnvelopeProcessor {
     try {
       const envelope = await this.client.getEnvelope(event.envelopeId);
       const senderDetails = envelopeSender(envelope, event.senderEmail);
-      const sender = (senderDetails.email || '').toLowerCase();
-      const rep = resolveRepFromSender(senderDetails, this.repEmailDomain);
+      const sender = normalizeEmail(senderDetails.email);
       if (this.allowedSenders.size && !this.allowedSenders.has(sender)) {
-        this.logger.warn('DocuSign sender is outside the configured sender allowlist; storing as rep-resolved envelope', {
+        await this.storage.updateEvent(eventFile, {
+          status: 'ignored',
+          processedAt: new Date().toISOString(),
+          reason: sender ? 'sender-not-allowed' : 'sender-unavailable',
+        });
+        this.logger.info('DocuSign envelope ignored by sender filter', {
           envelopeId: event.envelopeId,
           senderEmail: sender || undefined,
-          repType: rep.type,
         });
+        return;
       }
+
+      const recipients = await this.client.listRecipients(event.envelopeId);
+      const { rep, resolution } = resolveRepFromRecipients(recipients);
 
       const listed = await this.client.listDocuments(event.envelopeId);
       const documents = [];
@@ -56,10 +62,16 @@ export class CompletedEnvelopeProcessor {
       }
       const saved = await this.storage.saveEnvelope(event.envelopeId, documents, {
         status: envelope.status,
+        sender: {
+          email: sender || undefined,
+          name: senderDetails.name,
+        },
         senderEmail: sender || undefined,
         completedDateTime: envelope.completedDateTime,
         eventTimestamp: event.timestamp,
         rep,
+        repSource: 'completed_signer',
+        recipientResolution: resolution,
       });
       await this.storage.updateEvent(eventFile, {
         status: 'processed',
@@ -76,6 +88,7 @@ export class CompletedEnvelopeProcessor {
       });
       const message = {
         authentication: 'DocuSign authentication failure',
+        'recipient-list': 'DocuSign recipient-list failure',
         'document-list': 'DocuSign document-list failure',
         'document-download': 'DocuSign document-download failure',
       }[error.stage] || 'DocuSign envelope processing failed';

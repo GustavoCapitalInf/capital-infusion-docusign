@@ -5,6 +5,7 @@ import { DocusignJwtAuth } from './docusign/auth.js';
 import { DocusignClient } from './docusign/client.js';
 import { createStorageProvider } from './docusign/storage-provider.js';
 import { CompletedEnvelopeProcessor } from './docusign/processor.js';
+import { migrateSignerRepMetadata } from './docusign/rep-migration.js';
 import { createApp } from './app.js';
 
 const config = loadConfig();
@@ -16,7 +17,6 @@ const processor = new CompletedEnvelopeProcessor({
   client,
   storage,
   allowedSenders: config.docusign.allowedSenders,
-  repEmailDomain: config.docusign.repEmailDomain,
   logger,
 });
 const server = createServer(createApp({ config, storage, processor, auth, logger }));
@@ -38,4 +38,9 @@ if (missing.length) {
 
 server.listen(config.port, '0.0.0.0', () => {
   logger.info('Server listening', { port: config.port, host: '0.0.0.0' });
+  void migrateSignerRepMetadata({ client, storage, logger })
+    .then((result) => logger.info('DocuSign signer-rep metadata migration finished', result))
+    .catch((error) => logger.warn('DocuSign signer-rep metadata migration could not finish', {
+      stage: error.stage || 'recipient-migration',
+    }));
 });

@@ -5,6 +5,7 @@ import {
   verifyConnectHmac,
 } from './docusign/webhook.js';
 import { documentsPage } from './documents-ui.js';
+import { normalizeEmail } from './docusign/rep.js';
 
 function json(response, status, body) {
   const contents = JSON.stringify(body);
@@ -25,9 +26,9 @@ function safeDecode(value) {
   }
 }
 
-function validRepId(value, domain) {
-  const escapedDomain = String(domain || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return value === 'unassigned' || new RegExp(`^[^\\s/@]+@${escapedDomain}$`, 'i').test(value || '');
+function normalizeRepId(value) {
+  if (['unassigned', 'requires-resolution'].includes(value)) return value;
+  return normalizeEmail(value) || undefined;
 }
 
 function validEnvelopeId(value) {
@@ -175,9 +176,10 @@ export function createApp({ config, storage, processor, auth, logger }) {
     const repMatch = request.method === 'GET' && url.pathname.match(/^\/api\/reps\/([^/]+)\/envelopes$/);
     if (repMatch) {
       const repId = safeDecode(repMatch[1]);
-      if (!validRepId(repId, config.docusign.repEmailDomain)) return json(response, 400, { error: 'Invalid rep ID' });
+      const normalizedRepId = normalizeRepId(repId);
+      if (!normalizedRepId) return json(response, 400, { error: 'Invalid rep ID' });
       return catalogResponse(response, logger, async () => {
-        const result = await storage.listRepEnvelopes(repId);
+        const result = await storage.listRepEnvelopes(normalizedRepId);
         if (!result) return json(response, 404, { error: 'Rep not found' });
         return json(response, 200, { rep: result.rep, envelopes: filterAndSortEnvelopes(result.envelopes, url) });
       });

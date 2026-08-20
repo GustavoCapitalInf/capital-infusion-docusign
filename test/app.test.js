@@ -6,7 +6,7 @@ import { createApp } from '../src/app.js';
 
 function fixture() {
   const calls = [];
-  const config = { docusign: { maxWebhookBytes: 100_000, hmacSecret: 'secret', requireHmac: true, repEmailDomain: 'capital-infusion.com' } };
+  const config = { docusign: { maxWebhookBytes: 100_000, hmacSecret: 'secret', requireHmac: true } };
   const storage = {
     provider: 'filesystem',
     claim: async (event) => ({ claimed: true, file: '/event.json', event }),
@@ -175,15 +175,20 @@ test('lists reps with search and activity sorting', async () => {
 
 test('lists a rep envelopes newest first and validates rep IDs', async () => {
   const dependencies = fixture();
-  dependencies.storage.listRepEnvelopes = async () => ({
-    rep: { repId: 'john@capital-infusion.com', type: 'internal', email: 'john@capital-infusion.com', name: 'John Smith' },
+  let requestedRepId;
+  dependencies.storage.listRepEnvelopes = async (repId) => {
+    requestedRepId = repId;
+    return ({
+    rep: { repId: 'gustavoprietop@gmail.com', type: 'signer', email: 'gustavoprietop@gmail.com', name: 'Gustavo Prieto' },
     envelopes: [
       { envelopeId: 'old', completedAt: '2026-01-01', primaryDocumentName: 'Old.pdf' },
       { envelopeId: 'new', completedAt: '2026-08-20', primaryDocumentName: 'New.pdf' },
     ],
-  });
-  const response = await invoke(dependencies, { method: 'GET', url: '/api/reps/john%40capital-infusion.com/envelopes' });
+    });
+  };
+  const response = await invoke(dependencies, { method: 'GET', url: '/api/reps/GustavoPrietoP%40GMAIL.com/envelopes' });
   assert.equal(response.status, 200);
+  assert.equal(requestedRepId, 'gustavoprietop@gmail.com');
   assert.deepEqual(response.body.envelopes.map((item) => item.envelopeId), ['new', 'old']);
   const invalid = await invoke(dependencies, { method: 'GET', url: '/api/reps/not-an-email/envelopes' });
   assert.equal(invalid.status, 400);
