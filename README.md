@@ -141,6 +141,21 @@ returns the private key, JWT assertion, access token, or authorization header.
 This endpoint is temporary and should be removed or access-controlled after JWT
 setup has been verified.
 
+### Temporary HMAC diagnostics
+
+During Connect HMAC troubleshooting, the webhook logs only safe request metadata:
+content type, whether the raw body is a Buffer, its byte length, signature-header
+presence/count, whether the HMAC secret is configured, and the validation result.
+The latest in-memory result is also available at:
+
+```text
+GET https://capital-infusion-docusign.onrender.com/api/docusign/hmac-diagnostics
+```
+
+Neither the log nor diagnostic endpoint includes the request body, supplied or
+calculated signature, HMAC secret, private key, JWT, or access token. The diagnostic
+endpoint is temporary and should be removed after HMAC setup is verified.
+
 Useful DocuSign references:
 
 - [Build a Connect listener](https://developers.docusign.com/platform/webhooks/connect/build-listener/)

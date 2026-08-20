@@ -1,4 +1,9 @@
-import { parseAndNormalizeWebhook, isCompletedEnvelope, verifyConnectHmac } from './docusign/webhook.js';
+import {
+  connectHmacDiagnostics,
+  parseAndNormalizeWebhook,
+  isCompletedEnvelope,
+  verifyConnectHmac,
+} from './docusign/webhook.js';
 
 function json(response, status, body) {
   const contents = JSON.stringify(body);
@@ -18,6 +23,7 @@ async function readBody(request, limit) {
 }
 
 export function createApp({ config, storage, processor, auth, logger }) {
+  let latestHmacDiagnostics;
   return async function app(request, response) {
     const url = new URL(request.url, 'http://localhost');
     if (request.method === 'GET' && url.pathname === '/health') return json(response, 200, { status: 'ok' });
@@ -54,11 +60,32 @@ export function createApp({ config, storage, processor, auth, logger }) {
         });
       }
     }
+    if (request.method === 'GET' && url.pathname === '/api/docusign/hmac-diagnostics') {
+      return json(response, 200, latestHmacDiagnostics || { available: false });
+    }
     if (request.method !== 'POST' || url.pathname !== '/api/webhooks/docusign') return json(response, 404, { error: 'Not found' });
 
     try {
       const rawBody = await readBody(request, config.docusign.maxWebhookBytes);
-      if (!verifyConnectHmac(rawBody, request.headers, config.docusign.hmacSecret, config.docusign.requireHmac)) {
+      const hmacValid = verifyConnectHmac(
+        rawBody,
+        request.headers,
+        config.docusign.hmacSecret,
+        config.docusign.requireHmac,
+      );
+      latestHmacDiagnostics = {
+        available: true,
+        receivedAt: new Date().toISOString(),
+        ...connectHmacDiagnostics(
+          rawBody,
+          request.headers,
+          config.docusign.hmacSecret,
+          hmacValid,
+          request.headers['content-type'] || '',
+        ),
+      };
+      logger.info('DocuSign webhook HMAC diagnostics', latestHmacDiagnostics);
+      if (!hmacValid) {
         logger.warn('Invalid DocuSign webhook signature');
         return json(response, 401, { error: 'Invalid webhook signature' });
       }

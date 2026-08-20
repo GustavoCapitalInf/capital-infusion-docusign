@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import {
+  connectHmacDiagnostics,
   isCompletedEnvelope,
   parseAndNormalizeWebhook,
   verifyConnectHmac,
@@ -50,4 +51,25 @@ test('validates HMAC against the unchanged raw body', () => {
   assert.equal(verifyConnectHmac(Buffer.concat([body, Buffer.from(' ')]), { 'x-docusign-signature-1': signature }, 'shared-secret'), false);
   assert.equal(verifyConnectHmac(body, {}, '', true), false);
   assert.equal(verifyConnectHmac(body, {}, '', false), true);
+});
+
+test('accepts case-insensitive signature headers and reports safe diagnostics', () => {
+  const body = Buffer.from('{"lineEndings":"must remain exact"}\r\n');
+  const signature = createHmac('sha256', 'shared-secret').update(body).digest('base64');
+  const headers = {
+    'Content-Type': 'application/json',
+    'X-DocuSign-Signature-1': signature,
+    'X-DocuSign-Signature-2': 'another-signature',
+  };
+  assert.equal(verifyConnectHmac(body, headers, 'shared-secret'), true);
+  assert.deepEqual(connectHmacDiagnostics(body, headers, 'shared-secret', true, 'application/json'), {
+    contentType: 'application/json',
+    rawBodyIsBuffer: true,
+    rawBodyByteLength: body.length,
+    signature1Present: true,
+    signatureHeaderCount: 2,
+    hmacSecretConfigured: true,
+    hmacValidationResult: true,
+  });
+  assert.equal(verifyConnectHmac(Buffer.from(body.toString().trim()), headers, 'shared-secret'), false);
 });

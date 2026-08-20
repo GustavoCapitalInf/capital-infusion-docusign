@@ -63,18 +63,39 @@ export function isCompletedEnvelope(event) {
     (event.status === 'completed' && (!event.event || event.event.includes('envelope')));
 }
 
+function getHeader(headers, name) {
+  const target = name.toLowerCase();
+  if (headers[target] !== undefined) return headers[target];
+  const entry = Object.entries(headers).find(([header]) => header.toLowerCase() === target);
+  return entry?.[1];
+}
+
+export function connectHmacDiagnostics(rawBody, headers, secret, validationResult, contentType = '') {
+  const signatureHeaders = Object.keys(headers)
+    .filter((header) => /^x-docusign-signature-\d+$/i.test(header));
+  return {
+    contentType,
+    rawBodyIsBuffer: Buffer.isBuffer(rawBody),
+    rawBodyByteLength: Buffer.isBuffer(rawBody) ? rawBody.length : undefined,
+    signature1Present: Boolean(getHeader(headers, 'x-docusign-signature-1')),
+    signatureHeaderCount: signatureHeaders.length,
+    hmacSecretConfigured: Boolean(secret),
+    hmacValidationResult: validationResult,
+  };
+}
+
 export function verifyConnectHmac(rawBody, headers, secret, required = true) {
   const signatures = [1, 2, 3, 4, 5]
-    .map((number) => headers[`x-docusign-signature-${number}`])
+    .map((number) => getHeader(headers, `x-docusign-signature-${number}`))
     .filter(Boolean)
     .flatMap((value) => Array.isArray(value) ? value : [value]);
 
   if (!secret) return !required;
   if (!signatures.length) return false;
-  const expected = createHmac('sha256', secret).update(rawBody).digest();
+  const expected = Buffer.from(createHmac('sha256', secret).update(rawBody).digest('base64'), 'utf8');
   return signatures.some((signature) => {
     try {
-      const actual = Buffer.from(signature, 'base64');
+      const actual = Buffer.from(String(signature).trim(), 'utf8');
       return actual.length === expected.length && timingSafeEqual(actual, expected);
     } catch {
       return false;
