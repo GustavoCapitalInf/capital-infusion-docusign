@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   attentionContracts,
   avatarInitials,
+  contractDistribution,
   contractStatus,
   dashboardSummary,
   documentPresentation,
@@ -117,20 +118,77 @@ test('dashboard and detail views include required human-facing sections and empt
   ]) assert.equal(documentsPage.includes(text), true, `missing ${text}`);
 });
 
-test('CapLink app shell, simplified topbar, and reusable row components render', () => {
-  assert.equal(documentsPage.includes('class="app-shell"'), true);
+test('CapLink app shell renders the sidebar, topbar, and reusable row components', () => {
+  assert.equal(documentsPage.includes('class="app-shell" id="app-shell"'), true);
+  assert.equal(documentsPage.includes('class="app-frame"'), true);
+  assert.equal(documentsPage.includes('<nav class="sidebar" aria-label="Main">'), true);
   assert.equal(documentsPage.includes('class="topbar"'), true);
   assert.equal(documentsPage.includes('<strong>Contract Management</strong>'), true);
   assert.equal(documentsPage.includes('<span>Capital Infusion</span>'), true);
-  assert.equal(documentsPage.includes('class="sidebar"'), false);
-  assert.equal(documentsPage.includes('id="menu-toggle"'), false);
-  assert.equal(documentsPage.includes('Internal Operations'), false);
-  assert.equal(documentsPage.includes('Company workspace'), false);
-  assert.equal(documentsPage.includes('Internal operations workspace'), false);
+  assert.equal(documentsPage.includes('id="overview-panel"'), true);
   for (const component of ['function PageHeader', 'function Panel', 'function StatCard', 'function RepRow',
-    'function AgreementRow', 'function DocumentRow', 'function EmptyState', 'function DetailsDisclosure']) {
+    'function AgreementRow', 'function DocumentRow', 'function EmptyState', 'function DetailsDisclosure',
+    'function FilterPills', 'function TypeCard', 'function DonutRing', 'function renderOverviewPanel']) {
     assert.equal(documentsPage.includes(component), true, `missing ${component}`);
   }
+});
+
+test('sidebar navigation only links to routes and sections this app really has', () => {
+  for (const href of ['href="/documents"', 'href="/documents#representatives"',
+    'href="/documents#needs-attention"', 'href="/documents#upcoming-renewals"']) {
+    assert.equal(documentsPage.includes(href), true, `missing ${href}`);
+  }
+  assert.equal(documentsPage.includes('id="nav-collapse"'), true);
+  assert.equal(documentsPage.includes('id="nav-expand"'), true);
+  assert.equal(documentsPage.includes('id="menu-toggle"'), false);
+  for (const invented of ['Channels', 'Messages', 'Notifications', 'New contract', 'Invite', 'Presence']) {
+    assert.equal(documentsPage.includes(invented), false, `invented feature ${invented}`);
+  }
+});
+
+test('no representative, contract, or document values are hardcoded into the page', () => {
+  for (const mock of ['Nathalia Nava', 'Adrian Luis', 'Bryan Castillo', 'Marcus Webb', 'Dana Kessler',
+    'Sarah Fondeur', 'Gustavo', '294 KB', '337 KB', 'capital-infusion.com']) {
+    assert.equal(documentsPage.includes(mock), false, `hardcoded value ${mock}`);
+  }
+  for (const source of ["api('/api/reps?sort=recent')", "api(endpoint)",
+    "api('/api/docusign/envelopes/'+encodeURIComponent(envelopeId))"]) {
+    assert.equal(documentsPage.includes(source), true, `missing live data source ${source}`);
+  }
+});
+
+test('contract distribution derives every dashboard tile from live rep contracts', () => {
+  const reps = [
+    { name: 'A', contract: { currentTier: 1, currentContract: {}, contractType: 'W-2', daysRemaining: 183 } },
+    { name: 'B', contract: { currentTier: 2, currentContract: {}, contractType: '1099', daysRemaining: 12 } },
+    { name: 'C', contract: { currentTier: 3, currentContract: {}, contractType: 'W-2', daysRemaining: -4 } },
+    { name: 'D' },
+  ];
+  assert.deepEqual(contractDistribution(reps), {
+    tracked: 3,
+    active: 2,
+    healthy: 1,
+    dueSoon: 1,
+    expired: 1,
+    'W-2': 2,
+    1099: 1,
+    tier1: 1,
+    tier2: 1,
+    tier3: 0,
+  });
+  assert.deepEqual(contractDistribution([]), {
+    tracked: 0, active: 0, healthy: 0, dueSoon: 0, expired: 0, 'W-2': 0, 1099: 0, tier1: 0, tier2: 0, tier3: 0,
+  });
+});
+
+test('the contract overview panel is built from live counts, not fixed figures', () => {
+  for (const text of ['Contract Overview', 'contracts tracked', 'Total Active', 'Renewals Due',
+    'Tier distribution', 'Independent contractors', 'Employed representatives']) {
+    assert.equal(documentsPage.includes(text), true, `missing ${text}`);
+  }
+  assert.equal(documentsPage.includes("distribution.healthy,'#12b47a'"), true);
+  assert.equal(documentsPage.includes("distribution.dueSoon,'#ffc629'"), true);
+  assert.equal(documentsPage.includes("distribution.expired,'#ff6b6b'"), true);
 });
 
 test('rep and agreement rows remain full keyboard-focusable links with clear affordances', () => {
@@ -151,13 +209,16 @@ test('rep tabs have keyboard behavior and associated tab panels', () => {
 });
 
 test('dashboard includes All, W-2, and 1099 representative filters and contract type badges', () => {
-  assert.equal(documentsPage.includes('data-contract-type="all"'), true);
-  assert.equal(documentsPage.includes('data-contract-type="W-2"'), true);
-  assert.equal(documentsPage.includes('data-contract-type="1099"'), true);
+  assert.equal(documentsPage.includes('data-contract-type='), true);
+  assert.equal(documentsPage.includes('data-type-card='), true);
+  assert.equal(documentsPage.includes("pill('all',distribution.tracked,'All contracts')"), true);
+  assert.equal(documentsPage.includes("pill('W-2',distribution['W-2'],'W-2')"), true);
+  assert.equal(documentsPage.includes("pill('1099',distribution['1099'],'1099')"), true);
+  assert.equal(documentsPage.includes("TypeCard('W-2',initial.reps)"), true);
+  assert.equal(documentsPage.includes("TypeCard('1099',initial.reps)"), true);
   assert.equal(documentsPage.includes("query.set('contractType',contractType)"), true);
   assert.equal(documentsPage.includes("StatusBadge(contract.contractType||'Unknown','contract')"), true);
   assert.equal(documentsPage.includes("['Contract Type',contract.contractType||'Unknown']"), true);
-  assert.equal(documentsPage.includes('.rep-type-tabs{width:calc(100% - 32px)}'), true);
 });
 
 test('page includes accessible shell controls and meaningful document actions without storage keys', () => {
