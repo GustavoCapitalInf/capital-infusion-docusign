@@ -20,15 +20,20 @@ function requiresResolution(metadata) {
 
 export async function migrateSignerRepMetadata({ client, storage, internalSigners, logger }) {
   if (!storage.listEnvelopeMetadataRecords || !storage.updateEnvelopeIdentity || !storage.rebuildIndexes) {
-    return { scanned: 0, migrated: 0, failed: 0, unresolvedBefore: 0, unresolvedAfter: 0 };
+    return { scanned: 0, migrated: 0, failed: 0, demoSkipped: 0, unresolvedBefore: 0, unresolvedAfter: 0 };
   }
 
   const records = await storage.listEnvelopeMetadataRecords();
   let migrated = 0;
   let failed = 0;
+  let demoSkipped = 0;
   let unresolvedBefore = 0;
   let unresolvedAfter = 0;
   for (const metadata of records) {
+    if (storage.isEnvelopeExcluded?.(metadata)) {
+      demoSkipped += 1;
+      continue;
+    }
     const wasUnresolved = requiresResolution(metadata);
     if (wasUnresolved) unresolvedBefore += 1;
     if (metadata.recipientResolution?.resolverVersion === REP_RESOLVER_VERSION) {
@@ -56,5 +61,5 @@ export async function migrateSignerRepMetadata({ client, storage, internalSigner
   }
 
   await storage.rebuildIndexes();
-  return { scanned: records.length, migrated, failed, unresolvedBefore, unresolvedAfter };
+  return { scanned: records.length, migrated, failed, demoSkipped, unresolvedBefore, unresolvedAfter };
 }

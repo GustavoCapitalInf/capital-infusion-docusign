@@ -26,6 +26,26 @@ function emailSet(value, fallback = '') {
   );
 }
 
+function stringSet(value) {
+  return new Set(
+    String(value || '')
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean),
+  );
+}
+
+function docusignEnvironment(environment) {
+  const explicit = string(environment.DOCUSIGN_ENVIRONMENT).toLowerCase();
+  if (explicit && !['demo', 'production'].includes(explicit)) {
+    throw new Error('DOCUSIGN_ENVIRONMENT must be demo or production');
+  }
+  if (explicit) return explicit;
+  const authServer = string(environment.DOCUSIGN_AUTH_SERVER, 'account-d.docusign.com').toLowerCase();
+  const baseUrl = string(environment.DOCUSIGN_BASE_URL, 'https://demo.docusign.net').toLowerCase();
+  return authServer.includes('account-d.') || baseUrl.includes('demo.docusign.net') ? 'demo' : 'production';
+}
+
 export function loadConfig(environment = process.env) {
   return {
     port: positiveInteger(environment.PORT, 3000, 'PORT'),
@@ -37,6 +57,9 @@ export function loadConfig(environment = process.env) {
       privateKeyPath: string(environment.DOCUSIGN_PRIVATE_KEY_PATH),
       authServer: string(environment.DOCUSIGN_AUTH_SERVER, 'account-d.docusign.com'),
       baseUrl: string(environment.DOCUSIGN_BASE_URL, 'https://demo.docusign.net').replace(/\/$/, ''),
+      environment: docusignEnvironment(environment),
+      demoEnvelopeIds: stringSet(environment.DOCUSIGN_DEMO_ENVELOPE_IDS),
+      demoAccountIds: stringSet(environment.DOCUSIGN_DEMO_ACCOUNT_IDS),
       allowedSenders: emailSet(environment.DOCUSIGN_ALLOWED_SENDERS),
       internalSigners: emailSet([
         'hr@capital-infusion.com',

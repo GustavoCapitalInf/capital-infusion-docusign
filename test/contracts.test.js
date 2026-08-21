@@ -201,6 +201,38 @@ test('historical backfill preserves legacy lifecycle records as unknown', async 
   ]);
 });
 
+test('historical backfill ignores production-excluded demo metadata', async () => {
+  const updates = [];
+  const service = new ContractLifecycleService({
+    storage: {
+      listEnvelopeMetadataRecords: async () => [{
+        envelopeId: 'demo',
+        rep,
+        repSource: 'completed_signer',
+        completedAt: '2026-01-01T00:00:00Z',
+        documents: [{ documentId: '1', name: 'Employment_Offer_and_Agreement.pdf' }],
+      }, {
+        envelopeId: 'production',
+        rep,
+        repSource: 'completed_signer',
+        completedAt: '2026-07-01T00:00:00Z',
+        documents: [{ documentId: '1', name: 'Employment_Offer_and_Agreement.pdf' }],
+      }],
+      isEnvelopeExcluded: (metadata) => metadata.envelopeId === 'demo',
+      updateRepContractLifecycle: async (repId, mutate) => updates.push({ repId, lifecycle: mutate(undefined) }),
+    },
+    logger: { info() {}, warn() {} },
+    now: () => new Date('2026-08-20T00:00:00Z'),
+  });
+  assert.deepEqual(await service.backfillFromEnvelopeMetadata(), {
+    scannedEnvelopes: 1,
+    trackedEnvelopes: 1,
+    lifecycleCount: 1,
+  });
+  assert.equal(updates[0].lifecycle.contracts.length, 1);
+  assert.equal(updates[0].lifecycle.currentContract.envelopeId, 'production');
+});
+
 test('duplicate webhook backfills contract type without changing tier', () => {
   const original = buildContractLifecycle(rep, [envelope('A', '2026-01-01T00:00:00Z')]);
   const legacy = {

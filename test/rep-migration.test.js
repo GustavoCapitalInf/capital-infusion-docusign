@@ -29,6 +29,7 @@ test('migrates legacy sender-based metadata using authoritative completed signer
     scanned: 1,
     migrated: 1,
     failed: 0,
+    demoSkipped: 0,
     unresolvedBefore: 0,
     unresolvedAfter: 0,
   });
@@ -74,6 +75,7 @@ test('skips metadata already processed by the current resolver', async () => {
     scanned: 1,
     migrated: 0,
     failed: 0,
+    demoSkipped: 0,
     unresolvedBefore: 0,
     unresolvedAfter: 0,
   });
@@ -112,6 +114,7 @@ test('idempotently reprocesses an existing unresolved HR plus representative env
     scanned: 1,
     migrated: 1,
     failed: 0,
+    demoSkipped: 0,
     unresolvedBefore: 1,
     unresolvedAfter: 0,
   });
@@ -120,8 +123,42 @@ test('idempotently reprocesses an existing unresolved HR plus representative env
     scanned: 1,
     migrated: 0,
     failed: 0,
+    demoSkipped: 0,
     unresolvedBefore: 0,
     unresolvedAfter: 0,
   });
   assert.equal(recipientRequests, 1);
+});
+
+test('skips the four known demo envelopes before production recipient lookups', async () => {
+  const records = [
+    '1a8d27b7-5eff-8640-80eb-1ca1738a1374',
+    'e277245f-e424-8683-8123-2d76be8e1384',
+    '3d7b2f01-f4b7-809f-8044-f78473831380',
+    '68e02c5c-a74c-8e80-81d6-cdde5f85139c',
+  ].map((envelopeId) => ({ envelopeId, recipientResolution: { status: 'resolved' } }));
+  let recipientRequests = 0;
+  let rebuilds = 0;
+  let warnings = 0;
+  const result = await migrateSignerRepMetadata({
+    client: { listRecipients: async () => { recipientRequests += 1; } },
+    storage: {
+      listEnvelopeMetadataRecords: async () => records,
+      isEnvelopeExcluded: () => true,
+      updateEnvelopeIdentity: async () => { throw new Error('not expected'); },
+      rebuildIndexes: async () => { rebuilds += 1; },
+    },
+    logger: { warn() { warnings += 1; } },
+  });
+  assert.deepEqual(result, {
+    scanned: 4,
+    migrated: 0,
+    failed: 0,
+    demoSkipped: 4,
+    unresolvedBefore: 0,
+    unresolvedAfter: 0,
+  });
+  assert.equal(recipientRequests, 0);
+  assert.equal(rebuilds, 1);
+  assert.equal(warnings, 0);
 });

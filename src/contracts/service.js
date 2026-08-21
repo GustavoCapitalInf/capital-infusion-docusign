@@ -31,6 +31,7 @@ export class ContractLifecycleService {
     let scannedEnvelopes = 0;
     let trackedEnvelopes = 0;
     for (const metadata of await this.storage.listEnvelopeMetadataRecords()) {
+      if (this.storage.isEnvelopeExcluded?.(metadata)) continue;
       let envelope;
       try {
         envelope = normalizeEnvelopeMetadata(metadata);

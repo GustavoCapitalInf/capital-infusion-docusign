@@ -32,10 +32,15 @@ async function atomicJson(file, value) {
 }
 
 export class FileStorage {
-  constructor(root) {
+  constructor(root, { demoPolicy } = {}) {
     this.root = root;
     this.provider = 'filesystem';
     this.contractQueues = new Map();
+    this.demoPolicy = demoPolicy;
+  }
+
+  isEnvelopeExcluded(metadata) {
+    return Boolean(this.demoPolicy?.excludesEnvelope(metadata));
   }
 
   eventPath(event) {
@@ -247,7 +252,8 @@ export class FileStorage {
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
       try {
-        lifecycles.push(JSON.parse(await readFile(path.join(root, entry.name, 'lifecycle.json'), 'utf8')));
+        const lifecycle = JSON.parse(await readFile(path.join(root, entry.name, 'lifecycle.json'), 'utf8'));
+        if (!this.demoPolicy?.excludesLifecycle(lifecycle)) lifecycles.push(lifecycle);
       } catch (error) {
         if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
       }
@@ -289,20 +295,11 @@ export class FileStorage {
   }
 
   async listEnvelopes() {
-    const root = path.join(this.root, 'envelopes');
-    let entries;
-    try {
-      entries = await readdir(root, { withFileTypes: true });
-    } catch (error) {
-      if (error.code === 'ENOENT') return [];
-      throw error;
-    }
     const envelopes = [];
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
+    for (const metadata of await this.listEnvelopeMetadataRecords()) {
+      if (this.isEnvelopeExcluded(metadata)) continue;
       try {
-        const envelope = await this.getEnvelope(entry.name);
-        if (envelope) envelopes.push(envelope);
+        envelopes.push(publicEnvelope(normalizeEnvelopeMetadata(metadata)));
       } catch (error) {
         if (error.message !== 'Corrupted envelope metadata') throw error;
       }

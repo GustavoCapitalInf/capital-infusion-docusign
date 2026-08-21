@@ -205,6 +205,15 @@ document bodies. The resolver version makes repeated startup runs idempotent. St
 sender and unresolved groups are emptied, and unique envelope IDs prevent count
 inflation.
 
+When the configured DocuSign environment is production, the catalog and startup
+migration exclude the four confirmed legacy demo envelope IDs from the earlier
+Sarah Fondeur/Gustavo demo run. Detection uses the immutable stored envelope ID and
+can be extended with stored demo environment/account signals through
+`DOCUSIGN_DEMO_ENVELOPE_IDS` and `DOCUSIGN_DEMO_ACCOUNT_IDS`. Demo records are
+skipped before recipient lookup and omitted from rebuilt dashboard indexes. Their
+R2 envelope metadata, PDFs, certificates, per-rep index objects, and lifecycle files
+are retained; this classification does not delete source data.
+
 Catalog APIs:
 
 ```text

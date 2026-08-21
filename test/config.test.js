@@ -17,7 +17,21 @@ test('uses local port defaults and trims Render environment values', () => {
   assert.equal(config.docusign.integrationKey, 'key-with-space');
   assert.equal(config.docusign.accountId, 'account-with-space');
   assert.equal(config.docusign.authServer, 'account-d.docusign.com');
+  assert.equal(config.docusign.environment, 'demo');
   assert.deepEqual([...config.docusign.internalSigners], ['hr@capital-infusion.com']);
+});
+
+test('infers production DocuSign and loads optional demo metadata IDs', () => {
+  const config = loadConfig({
+    DOCUSIGN_AUTH_SERVER: 'account.docusign.com',
+    DOCUSIGN_BASE_URL: 'https://na4.docusign.net',
+    DOCUSIGN_DEMO_ENVELOPE_IDS: 'demo-1, demo-2',
+    DOCUSIGN_DEMO_ACCOUNT_IDS: 'account-demo',
+  });
+  assert.equal(config.docusign.environment, 'production');
+  assert.deepEqual([...config.docusign.demoEnvelopeIds], ['demo-1', 'demo-2']);
+  assert.deepEqual([...config.docusign.demoAccountIds], ['account-demo']);
+  assert.throws(() => loadConfig({ DOCUSIGN_ENVIRONMENT: 'staging' }), /must be demo or production/);
 });
 
 test('loads exact internal signer emails without creating a domain-wide exclusion', () => {

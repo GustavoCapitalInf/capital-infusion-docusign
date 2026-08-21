@@ -10,7 +10,7 @@ import { documentFilename, metadataClassification, safeSegment } from './storage
 import { normalizeEnvelopeMetadata, publicEnvelope, repSummary, upsertEnvelope } from './catalog.js';
 
 const LOCK_MAX_AGE_MS = 15 * 60 * 1000;
-const CATALOG_SCHEMA_VERSION = 2;
+const CATALOG_SCHEMA_VERSION = 3;
 
 function isNotFound(error) {
   return ['NoSuchKey', 'NotFound'].includes(error?.name) || error?.$metadata?.httpStatusCode === 404;
@@ -46,14 +46,19 @@ async function bodyToString(body) {
 }
 
 export class R2Storage {
-  constructor({ client, bucket, prefix = 'docusign', now = () => new Date() }) {
+  constructor({ client, bucket, prefix = 'docusign', now = () => new Date(), demoPolicy }) {
     this.client = client;
     this.bucket = bucket;
     this.prefix = prefix.replace(/^\/+|\/+$/g, '');
     this.now = now;
     this.provider = 'r2';
+    this.demoPolicy = demoPolicy;
     this.catalogQueue = Promise.resolve();
     this.contractQueue = Promise.resolve();
+  }
+
+  isEnvelopeExcluded(metadata) {
+    return Boolean(this.demoPolicy?.excludesEnvelope(metadata));
   }
 
   eventKey(event) {
@@ -114,6 +119,7 @@ export class R2Storage {
 
   async indexEnvelopeUnlocked(metadata) {
     const envelope = publicEnvelope(normalizeEnvelopeMetadata(metadata));
+    if (this.isEnvelopeExcluded(metadata)) return envelope;
     const repIndex = await this.updateJsonIndex(
       this.repKey(envelope.rep.repId),
       { schemaVersion: CATALOG_SCHEMA_VERSION, repId: envelope.rep.repId, repEmail: envelope.rep.email, repName: envelope.rep.name, repType: envelope.rep.type, envelopes: [] },
@@ -349,7 +355,8 @@ export class R2Storage {
       for (const entry of result.CommonPrefixes || []) {
         if (!entry.Prefix) continue;
         try {
-          lifecycles.push(await this.getJson(`${entry.Prefix}lifecycle.json`));
+          const lifecycle = await this.getJson(`${entry.Prefix}lifecycle.json`);
+          if (!this.demoPolicy?.excludesLifecycle(lifecycle)) lifecycles.push(lifecycle);
         } catch (error) {
           if (!isNotFound(error) && !(error instanceof SyntaxError)) throw error;
         }
@@ -399,6 +406,7 @@ export class R2Storage {
       const envelopes = [];
       const groups = new Map();
       for (const metadata of await this.listEnvelopeMetadataRecords()) {
+        if (this.isEnvelopeExcluded(metadata)) continue;
         let envelope;
         try {
           envelope = publicEnvelope(normalizeEnvelopeMetadata(metadata));

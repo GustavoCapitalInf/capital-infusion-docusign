@@ -4,6 +4,7 @@ import { PutObjectCommand } from '@aws-sdk/client-s3';
 import { loadConfig, missingR2Configuration } from '../src/config.js';
 import { R2Storage } from '../src/docusign/r2-storage.js';
 import { createStorageProvider } from '../src/docusign/storage-provider.js';
+import { createDemoEnvelopePolicy } from '../src/docusign/demo.js';
 
 function preconditionFailed() {
   return Object.assign(new Error('condition failed'), {
@@ -181,6 +182,45 @@ test('lists reps, rep envelopes, global envelopes, details, and validated privat
   assert.equal(document.document.name, 'Application.pdf');
   assert.equal(await storage.getDocument('env-1', '../../secret'), undefined);
   assert.equal(await storage.getEnvelope('missing'), undefined);
+});
+
+test('production rebuild excludes demo indexes while preserving R2 metadata, PDFs, and lifecycle records', async () => {
+  const client = new MemoryS3Client();
+  const unfiltered = new R2Storage({ client, bucket: 'private-bucket' });
+  const demoEnvelopeId = '1a8d27b7-5eff-8640-80eb-1ca1738a1374';
+  const save = (storage, envelopeId, repId, name) => storage.saveEnvelope(envelopeId, [
+    { documentId: '1', name: 'docusign_test_document.pdf', type: 'content', category: 'application', contents: Buffer.from('pdf') },
+  ], {
+    status: 'completed',
+    senderEmail: 'gustavo@capital-infusion.com',
+    rep: { repId, type: 'signer', email: repId, name },
+    repSource: 'completed_signer',
+    recipientResolution: { status: 'resolved', completedSignerCount: 1 },
+    completedDateTime: '2026-08-20T00:00:00Z',
+  });
+  await save(unfiltered, demoEnvelopeId, 'sarahfondeur5@gmail.com', 'Sarah Fondeur');
+  await save(unfiltered, 'production-envelope', 'production@example.com', 'Production Rep');
+  await unfiltered.saveRepContractLifecycle('sarahfondeur5@gmail.com', {
+    repId: 'sarahfondeur5@gmail.com',
+    contracts: [{ envelopeId: demoEnvelopeId }],
+    contractResolutions: [],
+  });
+
+  const production = new R2Storage({
+    client,
+    bucket: 'private-bucket',
+    demoPolicy: createDemoEnvelopePolicy({ environment: 'production' }),
+  });
+  await production.rebuildIndexes();
+
+  assert.deepEqual((await production.listReps()).map((rep) => rep.repId), ['production@example.com']);
+  assert.deepEqual((await production.listEnvelopes()).map((envelope) => envelope.envelopeId), ['production-envelope']);
+  assert.equal(await production.listRepEnvelopes('sarahfondeur5@gmail.com'), undefined);
+  assert.equal((await production.getEnvelope(demoEnvelopeId)).rep.repId, 'sarahfondeur5@gmail.com');
+  assert.equal((await production.listContractLifecycles()).length, 0);
+  assert.equal((await production.getRepContractLifecycle('sarahfondeur5@gmail.com')).contracts.length, 1);
+  assert.equal(client.objects.has(`docusign/envelopes/${demoEnvelopeId}/metadata.json`), true);
+  assert.equal(client.objects.has(`docusign/envelopes/${demoEnvelopeId}/documents/1-docusign_test_document.pdf`), true);
 });
 
 test('keeps one signer rep while unique envelope count grows and duplicates do not inflate it', async () => {
