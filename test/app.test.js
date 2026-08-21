@@ -314,10 +314,11 @@ test('streams only document IDs validated against envelope metadata', async () =
 
 test('serves the rep-centric documents application routes', async () => {
   const dependencies = fixture();
-  for (const url of ['/documents', '/documents/reps/john%40capital-infusion.com', '/documents/envelopes/env-1']) {
+  for (const url of ['/documents', '/representatives', '/documents/reps/john%40capital-infusion.com', '/documents/envelopes/env-1']) {
     const response = await invoke(dependencies, { method: 'GET', url });
     assert.equal(response.status, 200);
     assert.equal(response.headers['content-type'], 'text/html; charset=utf-8');
     assert.equal(response.body.includes('Contract Management'), true);
   }
+  assert.equal((await invoke(dependencies, { method: 'GET', url: '/representatives/extra' })).status, 404);
 });
