@@ -15,7 +15,7 @@ function lifecycle() {
   return buildContractLifecycle(rep, [{
     envelopeId: 'envelope-A',
     completedAt: '2026-08-19T15:30:00.000Z',
-    documents: [{ documentId: '1', name: 'Capital Infusion - Sarah Fondeur.pdf' }],
+    documents: [{ documentId: '1', name: 'Employment_Offer_and_Agreement (Sarah Fondeur).pdf' }],
   }]);
 }
 

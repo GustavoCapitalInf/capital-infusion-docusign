@@ -13,10 +13,11 @@ function envelopeSender(envelope, webhookEmail) {
 }
 
 export class CompletedEnvelopeProcessor {
-  constructor({ client, storage, allowedSenders, contractLifecycle, logger }) {
+  constructor({ client, storage, allowedSenders, internalSigners, contractLifecycle, logger }) {
     this.client = client;
     this.storage = storage;
     this.allowedSenders = allowedSenders;
+    this.internalSigners = internalSigners;
     this.contractLifecycle = contractLifecycle;
     this.logger = logger;
   }
@@ -41,7 +42,9 @@ export class CompletedEnvelopeProcessor {
       }
 
       const recipients = await this.client.listRecipients(event.envelopeId);
-      const { rep, resolution } = resolveRepFromRecipients(recipients);
+      const { rep, resolution } = resolveRepFromRecipients(recipients, {
+        internalSigners: this.internalSigners,
+      });
 
       const listed = await this.client.listDocuments(event.envelopeId);
       const documents = [];

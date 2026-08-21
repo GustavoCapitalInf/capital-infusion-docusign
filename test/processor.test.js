@@ -38,7 +38,10 @@ test('keeps HR as sender and uses the completed signer as rep', async () => {
     completedDateTime: '2026-08-20T00:09:02Z',
     sender: { email: 'HR@capital-infusion.com', userName: 'Human Resources' },
   }, {
-    signers: [{ email: 'GustavoPrietoP@GMAIL.com', name: 'Gustavo Prieto', status: 'completed' }],
+    signers: [
+      { email: 'hr@capital-infusion.com', name: 'Human Resources', status: 'completed' },
+      { email: 'GustavoPrietoP@GMAIL.com', name: 'Gustavo Prieto', status: 'completed' },
+    ],
     carbonCopies: [{ email: 'audit@capital-infusion.com', status: 'completed' }],
   });
   await context.processor.process(
@@ -82,7 +85,7 @@ test('passes stored documents and authoritative completion time into contract ac
   }, {
     signers: [{ email: 'rep@example.com', name: 'Example Rep', status: 'completed' }],
   }, [
-    { documentId: '1', name: 'Capital Infusion - Example Rep.pdf', type: 'content' },
+    { documentId: '1', name: 'Capital_Infusion_IC_Account_Executive_Agreement (ER).pdf', type: 'content' },
     { documentId: '2', name: 'W9.pdf', type: 'content' },
   ]);
   await context.processor.process(
@@ -93,6 +96,6 @@ test('passes stored documents and authoritative completion time into contract ac
   assert.equal(context.contractEnvelopes[0].rep.repId, 'rep@example.com');
   assert.equal(context.contractEnvelopes[0].completedAt, '2026-08-20T00:09:02Z');
   assert.deepEqual(context.contractEnvelopes[0].documents.map((document) => document.name), [
-    'Capital Infusion - Example Rep.pdf', 'W9.pdf',
+    'Capital_Infusion_IC_Account_Executive_Agreement (ER).pdf', 'W9.pdf',
   ]);
 });

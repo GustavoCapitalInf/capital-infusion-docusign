@@ -56,6 +56,12 @@ async function invoke(dependencies, { body = '', headers = {}, method = 'POST', 
   return { status, body: parsedBody, headers: responseHeaders };
 }
 
+test('health check remains available', async () => {
+  const response = await invoke(fixture(), { method: 'GET', url: '/health' });
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body, { status: 'ok' });
+});
+
 test('acknowledges completed events before scheduling processing', async () => {
   const dependencies = fixture();
   const body = JSON.stringify({ event: 'envelope-completed', data: { envelopeId: 'env-1' } });
@@ -201,6 +207,27 @@ test('sorts tracked contracts by expiration with reps without contracts last', a
     'later@example.com',
     'none@example.com',
   ]);
+});
+
+test('filters representatives by current contract type before search and sorting', async () => {
+  const dependencies = fixture();
+  dependencies.storage.listReps = async () => [
+    { repId: 'w2@example.com', name: 'W2 Rep', email: 'w2@example.com', completedEnvelopeCount: 1 },
+    { repId: '1099@example.com', name: '1099 Rep', email: '1099@example.com', completedEnvelopeCount: 1 },
+    { repId: 'none@example.com', name: 'No Contract', email: 'none@example.com', completedEnvelopeCount: 1 },
+  ];
+  dependencies.contractLifecycle.enrichReps = async (reps) => reps.map((item) => ({
+    ...item,
+    contract: item.repId === 'none@example.com' ? undefined : {
+      contractType: item.repId === 'w2@example.com' ? 'W-2' : '1099',
+    },
+  }));
+  const w2 = await invoke(dependencies, { method: 'GET', url: '/api/reps?contractType=W-2&search=rep&sort=name' });
+  assert.deepEqual(w2.body.reps.map((item) => item.repId), ['w2@example.com']);
+  const contractors = await invoke(dependencies, { method: 'GET', url: '/api/reps?contractType=1099' });
+  assert.deepEqual(contractors.body.reps.map((item) => item.repId), ['1099@example.com']);
+  const all = await invoke(dependencies, { method: 'GET', url: '/api/reps?contractType=all' });
+  assert.equal(all.body.reps.length, 3);
 });
 
 test('returns contract lifecycle and upcoming renewals without changing envelope counts', async () => {

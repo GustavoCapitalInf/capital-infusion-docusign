@@ -1,16 +1,38 @@
-const TRACKED_CONTRACT_PATTERN = /^capital\s+infusion\s*-\s*.+\.pdf$/i;
+const CONTRACT_TYPE_PATTERNS = [
+  ['W-2', /^Employment_Offer_and_Agreement.*\.pdf$/i],
+  ['1099', /^Capital_Infusion_IC_Account_Executive_Agreement.*\.pdf$/i],
+];
 export const REMINDER_THRESHOLDS = [30, 15, 7, 0];
 
 function documentName(document) {
   return String(document?.name || document?.originalName || '').trim();
 }
 
+export function classifyContractType(filename) {
+  const name = String(filename || '').trim();
+  return CONTRACT_TYPE_PATTERNS.find(([, pattern]) => pattern.test(name))?.[0];
+}
+
 export function isTrackedEmploymentContract(filename) {
-  return TRACKED_CONTRACT_PATTERN.test(String(filename || '').trim());
+  return Boolean(classifyContractType(filename));
+}
+
+function contractTypeForDocument(document) {
+  const direct = classifyContractType(documentName(document));
+  if (direct) return direct;
+  const storedName = String(document?.storedName || '').trim();
+  const documentId = String(document?.documentId || '').trim();
+  const storedPrefix = `${documentId}-`;
+  if (!storedName || !documentId || !storedName.startsWith(storedPrefix)) return undefined;
+  return classifyContractType(storedName.slice(storedPrefix.length));
 }
 
 export function trackedContractDocuments(documents = []) {
-  return documents.filter((document) => isTrackedEmploymentContract(documentName(document)));
+  return documents.filter((document) => {
+    if (['certificate', 'supplemental'].includes(document?.classification)) return false;
+    if (document?.type && document.type !== 'content') return false;
+    return Boolean(contractTypeForDocument(document));
+  });
 }
 
 export function addCalendarMonths(timestamp, months) {
@@ -48,7 +70,7 @@ export function reminderThresholdForDays(daysRemaining) {
   return 0;
 }
 
-function recomputeLifecycle(identity, contracts, resolutions, updatedAt) {
+export function recomputeContractLifecycle(identity, contracts, resolutions, updatedAt) {
   const sorted = [...contracts].sort((a, b) =>
     String(a.signedAt).localeCompare(String(b.signedAt)) || String(a.envelopeId).localeCompare(String(b.envelopeId)));
   const tiered = sorted.map((contract, index) => ({
@@ -58,7 +80,7 @@ function recomputeLifecycle(identity, contracts, resolutions, updatedAt) {
   }));
   const currentContract = tiered.at(-1);
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     repId: identity.repId,
     repEmail: identity.email,
     repName: identity.name,
@@ -94,22 +116,32 @@ export function applyCompletedEnvelopeToLifecycle(current, envelope, updatedAt =
       documentIds: tracked.map((document) => String(document.documentId)),
       status: 'requires_contract_resolution',
     });
-    return { changed: true, lifecycle: recomputeLifecycle(identity, contracts, resolutions, updatedAt) };
+    return { changed: true, lifecycle: recomputeContractLifecycle(identity, contracts, resolutions, updatedAt) };
   }
 
-  if (contracts.some((contract) => contract.envelopeId === envelope.envelopeId)) {
-    return { changed: false, lifecycle: current };
-  }
   const document = tracked[0];
+  const contractType = contractTypeForDocument(document);
+  const existingContract = contracts.find((contract) => contract.envelopeId === envelope.envelopeId);
+  if (existingContract) {
+    if (existingContract.contractType === contractType) return { changed: false, lifecycle: current };
+    const updatedContracts = contracts.map((contract) => contract.envelopeId === envelope.envelopeId
+      ? { ...contract, contractType }
+      : contract);
+    return {
+      changed: true,
+      lifecycle: recomputeContractLifecycle(identity, updatedContracts, resolutions, updatedAt),
+    };
+  }
   resolutions = resolutions.filter((item) => item.envelopeId !== envelope.envelopeId);
   contracts.push({
     envelopeId: envelope.envelopeId,
     documentId: String(document.documentId),
     documentName: documentName(document),
+    contractType,
     signedAt: new Date(envelope.completedAt).toISOString(),
     expiresAt: addCalendarMonths(envelope.completedAt, 6),
   });
-  return { changed: true, lifecycle: recomputeLifecycle(identity, contracts, resolutions, updatedAt) };
+  return { changed: true, lifecycle: recomputeContractLifecycle(identity, contracts, resolutions, updatedAt) };
 }
 
 export function buildContractLifecycle(rep, envelopes, updatedAt = new Date().toISOString()) {
@@ -131,6 +163,7 @@ export function publicContractLifecycle(lifecycle, now = new Date()) {
     currentTier: lifecycle.currentTier,
     nextTier: lifecycle.nextTier,
     currentContract: lifecycle.currentContract,
+    contractType: lifecycle.currentContract?.contractType || 'unknown',
     signedAt: lifecycle.currentContract?.signedAt,
     expiresAt: lifecycle.currentContract?.expiresAt,
     daysRemaining: lifecycle.currentContract ? calendarDaysUntil(lifecycle.currentContract.expiresAt, now) : undefined,

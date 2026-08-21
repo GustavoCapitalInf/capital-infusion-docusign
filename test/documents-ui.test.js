@@ -150,6 +150,16 @@ test('rep tabs have keyboard behavior and associated tab panels', () => {
   assert.equal(documentsPage.includes("aria-selected"), true);
 });
 
+test('dashboard includes All, W-2, and 1099 representative filters and contract type badges', () => {
+  assert.equal(documentsPage.includes('data-contract-type="all"'), true);
+  assert.equal(documentsPage.includes('data-contract-type="W-2"'), true);
+  assert.equal(documentsPage.includes('data-contract-type="1099"'), true);
+  assert.equal(documentsPage.includes("query.set('contractType',contractType)"), true);
+  assert.equal(documentsPage.includes("StatusBadge(contract.contractType||'Unknown','contract')"), true);
+  assert.equal(documentsPage.includes("['Contract Type',contract.contractType||'Unknown']"), true);
+  assert.equal(documentsPage.includes('.rep-type-tabs{width:calc(100% - 32px)}'), true);
+});
+
 test('page includes accessible shell controls and meaningful document actions without storage keys', () => {
   assert.equal(documentsPage.includes('Skip to main content'), true);
   assert.equal(documentsPage.includes('<main class="content" id="main-content"'), true);

@@ -176,9 +176,13 @@ name is derived from the email username.
 
 The resolver considers only DocuSign `signers` whose status is `completed` or that
 have a signing timestamp. Carbon-copy recipients are excluded. Repeated signer
-records with the same normalized email are deduplicated. Exactly one unique
-completed signer resolves the rep; zero becomes `unassigned`, and multiple distinct
-completed signers become `requires-resolution` instead of being guessed.
+records with the same normalized email are deduplicated. Exact emails configured in
+`DOCUSIGN_INTERNAL_SIGNERS` are then excluded; `hr@capital-infusion.com` is always
+internal. Domains are deliberately not excluded because a representative may use a
+company address. Exactly one remaining external signer resolves the rep. Multiple
+external signers, or completed signers that are all internal, become
+`requires-resolution` instead of being guessed. Zero completed signers remains
+`unassigned`.
 
 R2 keeps the canonical envelope layout unchanged and adds logical JSON indexes:
 
@@ -193,11 +197,12 @@ webhooks cannot append duplicate rep-envelope relationships. If indexes do not y
 exist, the first catalog request backfills them by listing envelope prefixes and
 reading only `metadata.json`—document bodies are not scanned or downloaded.
 
-At startup, legacy sender-based metadata is detected by its missing
-`repSource: completed_signer` marker. The migration requests only recipient metadata
-from DocuSign, rewrites the envelope's sender and signer identity fields, and then
-rebuilds schema-versioned indexes from `metadata.json`. It never downloads document
-bodies. Stale sender groups are emptied, and unique envelope IDs prevent count
+At startup, metadata produced by an older representative resolver is detected by
+its missing resolver version. The migration requests only recipient metadata from
+DocuSign, applies internal-signer exclusion, rewrites the envelope identity fields,
+and then rebuilds schema-versioned indexes from `metadata.json`. It never downloads
+document bodies. The resolver version makes repeated startup runs idempotent. Stale
+sender and unresolved groups are emptied, and unique envelope IDs prevent count
 inflation.
 
 Catalog APIs:
@@ -210,7 +215,9 @@ GET /api/docusign/envelopes/:envelopeId
 GET /api/docusign/envelopes/:envelopeId/documents/:documentId
 ```
 
-The listing APIs support `search` and `sort` query parameters. Document access
+The listing APIs support `search` and `sort` query parameters. `GET /api/reps` also
+accepts `contractType=W-2` or `contractType=1099`; type filtering happens before
+search and sorting. Document access
 validates the envelope and document IDs against private metadata, then streams the
 object through the backend with private/no-store headers. Clients never submit or
 receive an R2 object key, credential, or permanent object URL. Add `?download=true`
@@ -230,10 +237,18 @@ latest completed-envelope webhook.
 
 ## Contract lifecycle and renewal reminders
 
-Only PDF names matching the case-insensitive, whitespace-tolerant
-`Capital Infusion - <Rep Name>.pdf` convention affect contract state. The completed
-signer's normalized email remains the rep ID; the name in the filename is never an
-identity key. Other envelope documents remain stored and counted normally.
+Only primary/content PDFs beginning with these case-insensitive filename prefixes
+affect contract state:
+
+```text
+Employment_Offer_and_Agreement*                       -> W-2
+Capital_Infusion_IC_Account_Executive_Agreement*      -> 1099
+```
+
+Certificates and supplemental documents never affect contract state. The completed
+external signer's normalized email remains the rep ID; filenames are classification
+inputs only and are never identity keys. Other envelope documents remain stored and
+counted normally.
 
 Contract state is stored separately from the immutable envelope/document layout:
 
@@ -247,6 +262,8 @@ second Tier 2, and the third and later contracts remain Tier 3. Previous contrac
 remain in history as `superseded`; the newest is `active`. Expiration uses six UTC
 calendar months with end-of-month clamping, not 180 days. Multiple matching PDFs
 in one envelope create `requires_contract_resolution` without advancing a tier.
+Each history entry persists `contractType: "W-2"` or `contractType: "1099"`;
+preserved legacy records without a classifiable filename use `unknown`.
 
 Startup backfill reads existing envelope `metadata.json` files, uses the stored
 signer identity and document names, and reconstructs lifecycle history without
@@ -262,7 +279,8 @@ GET /api/contracts/renewals
 
 `GET /api/reps` and `GET /api/reps/:repId/envelopes` also include safe contract
 summaries. Envelope counts continue to represent every completed envelope. The UI
-adds tier/expiration information, a renewal dashboard, and contract history without
+adds All/W-2/1099 representative tabs, visible contract-type badges,
+tier/expiration information, a renewal dashboard, and contract history without
 showing compensation data.
 
 ### Daily reminder job

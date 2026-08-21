@@ -19,6 +19,7 @@ const processor = new CompletedEnvelopeProcessor({
   client,
   storage,
   allowedSenders: config.docusign.allowedSenders,
+  internalSigners: config.docusign.internalSigners,
   contractLifecycle,
   logger,
 });
@@ -41,7 +42,12 @@ if (missing.length) {
 
 server.listen(config.port, '0.0.0.0', () => {
   logger.info('Server listening', { port: config.port, host: '0.0.0.0' });
-  void migrateSignerRepMetadata({ client, storage, logger })
+  void migrateSignerRepMetadata({
+    client,
+    storage,
+    internalSigners: config.docusign.internalSigners,
+    logger,
+  })
     .then((result) => {
       logger.info('DocuSign signer-rep metadata migration finished', result);
       return contractLifecycle.backfillFromEnvelopeMetadata();

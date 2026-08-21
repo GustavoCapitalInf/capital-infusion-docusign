@@ -24,8 +24,38 @@ test('resolves one completed signer as rep and never selects a CC', () => {
       email: 'gustavoprietop@gmail.com',
       name: 'Gustavo Prieto',
     },
-    resolution: { status: 'resolved', completedSignerCount: 1 },
+    resolution: {
+      status: 'resolved',
+      completedSignerCount: 1,
+      externalSignerCount: 1,
+      internalSignerCount: 0,
+      resolverVersion: 2,
+    },
   });
+});
+
+test('excludes an HR signer and resolves the remaining external signer', () => {
+  const result = resolveRepFromRecipients({ signers: [
+    { email: 'hr@capital-infusion.com', name: 'Human Resources', status: 'completed' },
+    { email: 'nathalia@example.com', name: 'Nathalia Nava', status: 'completed' },
+  ] });
+  assert.equal(result.rep.repId, 'nathalia@example.com');
+  assert.equal(result.rep.name, 'Nathalia Nava');
+  assert.deepEqual(result.resolution, {
+    status: 'resolved',
+    completedSignerCount: 2,
+    externalSignerCount: 1,
+    internalSignerCount: 1,
+    resolverVersion: 2,
+  });
+});
+
+test('supports an extensible exact internal signer list without excluding a whole domain', () => {
+  const result = resolveRepFromRecipients({ signers: [
+    { email: 'submissions@capital-infusion.com', status: 'completed' },
+    { email: 'actual.rep@capital-infusion.com', name: 'Actual Rep', status: 'completed' },
+  ] }, { internalSigners: new Set(['submissions@capital-infusion.com']) });
+  assert.equal(result.rep.repId, 'actual.rep@capital-infusion.com');
 });
 
 test('deduplicates signer records by normalized email', () => {
@@ -44,7 +74,27 @@ test('marks multiple distinct completed signers as requiring resolution', () => 
   ] });
   assert.equal(result.rep.repId, 'requires-resolution');
   assert.equal(result.rep.type, 'requires_resolution');
-  assert.deepEqual(result.resolution, { status: 'requires_resolution', completedSignerCount: 2 });
+  assert.deepEqual(result.resolution, {
+    status: 'requires_resolution',
+    completedSignerCount: 2,
+    externalSignerCount: 2,
+    internalSignerCount: 0,
+    resolverVersion: 2,
+  });
+});
+
+test('requires resolution when all completed signers are internal', () => {
+  const result = resolveRepFromRecipients({ signers: [
+    { email: 'hr@capital-infusion.com', status: 'completed' },
+  ] });
+  assert.equal(result.rep.repId, 'requires-resolution');
+  assert.deepEqual(result.resolution, {
+    status: 'requires_resolution',
+    completedSignerCount: 1,
+    externalSignerCount: 0,
+    internalSignerCount: 1,
+    resolverVersion: 2,
+  });
 });
 
 test('leaves envelopes without a completed signer unassigned', () => {

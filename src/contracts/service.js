@@ -2,7 +2,9 @@ import { normalizeEnvelopeMetadata } from '../docusign/catalog.js';
 import {
   applyCompletedEnvelopeToLifecycle,
   buildContractLifecycle,
+  classifyContractType,
   publicContractLifecycle,
+  recomputeContractLifecycle,
   reminderThresholdForDays,
   trackedContractDocuments,
 } from './lifecycle.js';
@@ -47,28 +49,25 @@ export class ContractLifecycleService {
 
     for (const [repId, group] of groups) {
       await this.storage.updateRepContractLifecycle(repId, (current) => {
-        const envelopes = [...group.envelopes];
-        const envelopeIds = new Set(envelopes.map((envelope) => envelope.envelopeId));
-        for (const contract of current?.contracts || []) {
-          if (envelopeIds.has(contract.envelopeId)) continue;
-          envelopes.push({
-            envelopeId: contract.envelopeId,
-            completedAt: contract.signedAt,
-            documents: [{
-              documentId: contract.documentId,
-              name: contract.documentName,
-            }],
-          });
-        }
-        const lifecycle = buildContractLifecycle(group.rep, envelopes, this.now().toISOString());
-        const knownResolutions = new Set((lifecycle.contractResolutions || []).map((item) => item.envelopeId));
+        const discovered = buildContractLifecycle(group.rep, group.envelopes, this.now().toISOString());
+        const discoveredEnvelopeIds = new Set([
+          ...(discovered?.contracts || []).map((contract) => contract.envelopeId),
+          ...(discovered?.contractResolutions || []).map((resolution) => resolution.envelopeId),
+        ]);
+        const preservedContracts = (current?.contracts || [])
+          .filter((contract) => !discoveredEnvelopeIds.has(contract.envelopeId))
+          .map((contract) => ({
+            ...contract,
+            contractType: contract.contractType || classifyContractType(contract.documentName) || 'unknown',
+          }));
         const preservedResolutions = (current?.contractResolutions || [])
-          .filter((item) => !knownResolutions.has(item.envelopeId));
-        return {
-          ...lifecycle,
-          contractResolutions: [...(lifecycle.contractResolutions || []), ...preservedResolutions],
-          requiresContractResolution: Boolean(lifecycle.requiresContractResolution || preservedResolutions.length),
-        };
+          .filter((resolution) => !discoveredEnvelopeIds.has(resolution.envelopeId));
+        return recomputeContractLifecycle(
+          group.rep,
+          [...preservedContracts, ...(discovered?.contracts || [])],
+          [...(discovered?.contractResolutions || []), ...preservedResolutions],
+          this.now().toISOString(),
+        );
       });
     }
     return { scannedEnvelopes, trackedEnvelopes, lifecycleCount: groups.size };

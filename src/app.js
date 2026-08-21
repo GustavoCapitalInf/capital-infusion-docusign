@@ -42,9 +42,13 @@ function validDocumentId(value) {
 function filterAndSortReps(reps, url) {
   const search = (url.searchParams.get('search') || '').trim().toLowerCase();
   const sort = url.searchParams.get('sort') || 'recent';
-  const filtered = search
-    ? reps.filter((rep) => `${rep.name || ''} ${rep.email || ''}`.toLowerCase().includes(search))
+  const contractType = url.searchParams.get('contractType');
+  const byContractType = ['W-2', '1099'].includes(contractType)
+    ? reps.filter((rep) => rep.contract?.contractType === contractType)
     : [...reps];
+  const filtered = search
+    ? byContractType.filter((rep) => `${rep.name || ''} ${rep.email || ''}`.toLowerCase().includes(search))
+    : byContractType;
   return filtered.sort((a, b) => {
     if (sort === 'name') return String(a.name || '').localeCompare(String(b.name || ''));
     if (sort === 'count') return b.completedEnvelopeCount - a.completedEnvelopeCount;

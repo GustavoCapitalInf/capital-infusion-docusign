@@ -4,6 +4,7 @@ import {
   addCalendarMonths,
   applyCompletedEnvelopeToLifecycle,
   buildContractLifecycle,
+  classifyContractType,
   isTrackedEmploymentContract,
   reminderThresholdForDays,
 } from '../src/contracts/lifecycle.js';
@@ -12,7 +13,7 @@ import { ResendContractEmailProvider } from '../src/contracts/email.js';
 
 const rep = { repId: 'rep@example.com', type: 'signer', email: 'rep@example.com', name: 'Example Rep' };
 
-function envelope(envelopeId, completedAt, names = ['Capital Infusion - Example Rep.pdf']) {
+function envelope(envelopeId, completedAt, names = ['Employment_Offer_and_Agreement.pdf']) {
   return {
     envelopeId,
     completedAt,
@@ -21,12 +22,16 @@ function envelope(envelopeId, completedAt, names = ['Capital Infusion - Example 
   };
 }
 
-test('detects only whitespace-tolerant Capital Infusion PDF names', () => {
-  assert.equal(isTrackedEmploymentContract('Capital Infusion - Gustavo Prieto.pdf'), true);
-  assert.equal(isTrackedEmploymentContract('  CAPITAL   INFUSION- Sarah Fondeur.PDF '), true);
-  assert.equal(isTrackedEmploymentContract('Capital Infusion - Sarah Fondeur.docx'), false);
+test('classifies only W-2 and 1099 PDF filename prefixes', () => {
+  assert.equal(classifyContractType('Employment_Offer_and_Agreement.pdf'), 'W-2');
+  assert.equal(classifyContractType('Employment_Offer_and_Agreement (ABC).pdf'), 'W-2');
+  assert.equal(classifyContractType('Employment_Offer_and_Agreement_v2.PDF'), 'W-2');
+  assert.equal(classifyContractType('Capital_Infusion_IC_Account_Executive_Agreement.pdf'), '1099');
+  assert.equal(classifyContractType('Capital_Infusion_IC_Account_Executive_Agreement (NN).pdf'), '1099');
+  assert.equal(isTrackedEmploymentContract('Capital Infusion - Sarah Fondeur.pdf'), false);
   assert.equal(isTrackedEmploymentContract('W9 - Sarah Fondeur.pdf'), false);
-  assert.equal(isTrackedEmploymentContract('NDA - Gustavo Prieto.pdf'), false);
+  assert.equal(isTrackedEmploymentContract('Summary'), false);
+  assert.equal(isTrackedEmploymentContract('random.pdf'), false);
 });
 
 test('uses six calendar months with end-of-month clamping', () => {
@@ -35,16 +40,60 @@ test('uses six calendar months with end-of-month clamping', () => {
   assert.equal(addCalendarMonths('2023-08-31T12:30:00Z', 6), '2024-02-29T12:30:00.000Z');
 });
 
+test('a first 1099 contract starts at Tier 1 and certificates never activate lifecycle', () => {
+  const contractor = applyCompletedEnvelopeToLifecycle(undefined, envelope(
+    'contractor',
+    '2026-08-20T00:00:00Z',
+    ['Capital_Infusion_IC_Account_Executive_Agreement (NN).pdf'],
+  )).lifecycle;
+  assert.equal(contractor.currentTier, 1);
+  assert.equal(contractor.currentContract.contractType, '1099');
+
+  const certificate = applyCompletedEnvelopeToLifecycle(undefined, {
+    envelopeId: 'certificate',
+    completedAt: '2026-08-20T00:00:00Z',
+    rep,
+    documents: [{
+      documentId: 'certificate',
+      name: 'Employment_Offer_and_Agreement.pdf',
+      classification: 'certificate',
+      type: 'summary',
+    }],
+  });
+  assert.deepEqual(certificate, { changed: false, lifecycle: undefined });
+});
+
+test('historical generated object names can be classified without reading PDF bodies', () => {
+  const result = applyCompletedEnvelopeToLifecycle(undefined, {
+    envelopeId: 'stored-name-only',
+    completedAt: '2026-08-20T00:00:00Z',
+    rep,
+    documents: [{
+      documentId: '1',
+      name: '1-Employment_Offer_and_Agreement.pdf',
+      storedName: '1-Employment_Offer_and_Agreement.pdf',
+      classification: 'signed_document',
+    }],
+  }).lifecycle;
+  assert.equal(result.currentContract.contractType, 'W-2');
+});
+
 test('assigns tiers from unique contract envelopes and caps at Tier 3', () => {
   let lifecycle;
   lifecycle = applyCompletedEnvelopeToLifecycle(lifecycle, envelope('A', '2026-01-01T00:00:00Z')).lifecycle;
   assert.equal(lifecycle.currentTier, 1);
+  assert.equal(lifecycle.currentContract.contractType, 'W-2');
   assert.equal(lifecycle.nextTier, 2);
   const duplicate = applyCompletedEnvelopeToLifecycle(lifecycle, envelope('A', '2026-01-01T00:00:00Z'));
   assert.equal(duplicate.changed, false);
   assert.equal(duplicate.lifecycle.contracts.length, 1);
-  lifecycle = applyCompletedEnvelopeToLifecycle(lifecycle, envelope('B', '2026-07-01T00:00:00Z')).lifecycle;
+  lifecycle = applyCompletedEnvelopeToLifecycle(lifecycle, envelope(
+    'B',
+    '2026-07-01T00:00:00Z',
+    ['Capital_Infusion_IC_Account_Executive_Agreement.pdf'],
+  )).lifecycle;
   assert.equal(lifecycle.currentTier, 2);
+  assert.equal(lifecycle.currentContract.contractType, '1099');
   assert.equal(lifecycle.contracts[0].status, 'superseded');
   lifecycle = applyCompletedEnvelopeToLifecycle(lifecycle, envelope('C', '2027-01-01T00:00:00Z')).lifecycle;
   assert.equal(lifecycle.currentTier, 3);
@@ -58,8 +107,8 @@ test('unrelated envelopes do not alter lifecycle and multiple tracked PDFs requi
   const unrelated = applyCompletedEnvelopeToLifecycle(undefined, envelope('normal', '2026-01-01', ['W9.pdf', 'NDA.pdf']));
   assert.deepEqual(unrelated, { changed: false, lifecycle: undefined });
   const ambiguous = applyCompletedEnvelopeToLifecycle(undefined, envelope('ambiguous', '2026-01-01', [
-    'Capital Infusion - One.pdf',
-    'Capital Infusion - Two.pdf',
+    'Employment_Offer_and_Agreement.pdf',
+    'Capital_Infusion_IC_Account_Executive_Agreement.pdf',
     'W9.pdf',
   ]));
   assert.equal(ambiguous.lifecycle.currentTier, undefined);
@@ -91,9 +140,9 @@ test('historical backfill reads metadata names and rebuilds tier order without d
   const service = new ContractLifecycleService({
     storage: {
       listEnvelopeMetadataRecords: async () => [
-        metadata('B', '2026-07-01T00:00:00Z', 'Capital Infusion - Example Rep.pdf'),
+        metadata('B', '2026-07-01T00:00:00Z', 'Capital_Infusion_IC_Account_Executive_Agreement (ER).pdf'),
         metadata('normal', '2026-02-01T00:00:00Z', 'NDA.pdf'),
-        metadata('A', '2026-01-01T00:00:00Z', 'Capital Infusion - Example Rep.pdf'),
+        metadata('A', '2026-01-01T00:00:00Z', 'Employment_Offer_and_Agreement (ER).pdf'),
       ],
       updateRepContractLifecycle: async (_repId, mutate) => { saved = mutate(undefined); return saved; },
     },
@@ -106,6 +155,65 @@ test('historical backfill reads metadata names and rebuilds tier order without d
     lifecycleCount: 1,
   });
   assert.deepEqual(saved.contracts.map((contract) => [contract.envelopeId, contract.tier]), [['A', 1], ['B', 2]]);
+  assert.deepEqual(saved.contracts.map((contract) => contract.contractType), ['W-2', '1099']);
+});
+
+test('historical backfill preserves legacy lifecycle records as unknown', async () => {
+  let saved;
+  const current = {
+    schemaVersion: 1,
+    repId: rep.repId,
+    repEmail: rep.email,
+    repName: rep.name,
+    contracts: [{
+      envelopeId: 'legacy',
+      documentId: '1',
+      documentName: 'Capital Infusion - Example Rep.pdf',
+      signedAt: '2026-01-01T00:00:00.000Z',
+      expiresAt: '2026-07-01T00:00:00.000Z',
+      tier: 1,
+      status: 'active',
+    }],
+    contractResolutions: [],
+  };
+  const service = new ContractLifecycleService({
+    storage: {
+      listEnvelopeMetadataRecords: async () => [{
+        envelopeId: 'new-w2',
+        completedAt: '2026-07-01T00:00:00Z',
+        rep,
+        repSource: 'completed_signer',
+        documents: [{ documentId: '1', name: 'Employment_Offer_and_Agreement.pdf' }],
+      }],
+      updateRepContractLifecycle: async (_repId, mutate) => { saved = mutate(current); return saved; },
+    },
+    logger: { info() {}, warn() {} },
+    now: () => new Date('2026-08-20T00:00:00Z'),
+  });
+  await service.backfillFromEnvelopeMetadata();
+  assert.deepEqual(saved.contracts.map((contract) => [
+    contract.envelopeId,
+    contract.contractType,
+    contract.tier,
+  ]), [
+    ['legacy', 'unknown', 1],
+    ['new-w2', 'W-2', 2],
+  ]);
+});
+
+test('duplicate webhook backfills contract type without changing tier', () => {
+  const original = buildContractLifecycle(rep, [envelope('A', '2026-01-01T00:00:00Z')]);
+  const legacy = {
+    ...original,
+    contracts: original.contracts.map(({ contractType: _type, ...contract }) => contract),
+    currentContract: undefined,
+  };
+  legacy.currentContract = legacy.contracts[0];
+  const result = applyCompletedEnvelopeToLifecycle(legacy, envelope('A', '2026-01-01T00:00:00Z'));
+  assert.equal(result.changed, true);
+  assert.equal(result.lifecycle.currentTier, 1);
+  assert.equal(result.lifecycle.contracts.length, 1);
+  assert.equal(result.lifecycle.currentContract.contractType, 'W-2');
 });
 
 test('selects 30, 15, 7, and expiration reminders with nearest missed threshold behavior', () => {

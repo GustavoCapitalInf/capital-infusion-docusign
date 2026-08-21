@@ -17,6 +17,17 @@ test('uses local port defaults and trims Render environment values', () => {
   assert.equal(config.docusign.integrationKey, 'key-with-space');
   assert.equal(config.docusign.accountId, 'account-with-space');
   assert.equal(config.docusign.authServer, 'account-d.docusign.com');
+  assert.deepEqual([...config.docusign.internalSigners], ['hr@capital-infusion.com']);
+});
+
+test('loads exact internal signer emails without creating a domain-wide exclusion', () => {
+  const config = loadConfig({
+    DOCUSIGN_INTERNAL_SIGNERS: ' HR@capital-infusion.com, submissions@capital-infusion.com ',
+  });
+  assert.deepEqual([...config.docusign.internalSigners], [
+    'hr@capital-infusion.com',
+    'submissions@capital-infusion.com',
+  ]);
 });
 
 test('reports missing R2 configuration without exposing configured values', () => {

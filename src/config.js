@@ -17,6 +17,15 @@ function string(value, fallback = '') {
   return String(value ?? fallback).trim();
 }
 
+function emailSet(value, fallback = '') {
+  return new Set(
+    String(value ?? fallback)
+      .split(',')
+      .map((email) => email.trim().toLowerCase())
+      .filter(Boolean),
+  );
+}
+
 export function loadConfig(environment = process.env) {
   return {
     port: positiveInteger(environment.PORT, 3000, 'PORT'),
@@ -28,12 +37,11 @@ export function loadConfig(environment = process.env) {
       privateKeyPath: string(environment.DOCUSIGN_PRIVATE_KEY_PATH),
       authServer: string(environment.DOCUSIGN_AUTH_SERVER, 'account-d.docusign.com'),
       baseUrl: string(environment.DOCUSIGN_BASE_URL, 'https://demo.docusign.net').replace(/\/$/, ''),
-      allowedSenders: new Set(
-        (environment.DOCUSIGN_ALLOWED_SENDERS || '')
-          .split(',')
-          .map((email) => email.trim().toLowerCase())
-          .filter(Boolean),
-      ),
+      allowedSenders: emailSet(environment.DOCUSIGN_ALLOWED_SENDERS),
+      internalSigners: emailSet([
+        'hr@capital-infusion.com',
+        environment.DOCUSIGN_INTERNAL_SIGNERS,
+      ].filter(Boolean).join(',')),
       hmacSecret: string(environment.DOCUSIGN_CONNECT_HMAC_SECRET),
       requireHmac: boolean(environment.DOCUSIGN_REQUIRE_HMAC, true),
       storageDir: path.resolve(environment.DOCUSIGN_STORAGE_DIR || './data/docusign'),
