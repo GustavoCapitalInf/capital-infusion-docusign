@@ -126,6 +126,7 @@ export function createApp({ config, storage, processor, auth, contractLifecycle,
     if (request.method === 'GET' && url.pathname === '/health') return json(response, 200, { status: 'ok' });
     if (request.method === 'GET' && (
       url.pathname === '/documents' ||
+      url.pathname === '/representatives' ||
       /^\/documents\/reps\/[^/]+$/.test(url.pathname) ||
       /^\/documents\/envelopes\/[^/]+$/.test(url.pathname)
     )) return html(response, documentsPage);
